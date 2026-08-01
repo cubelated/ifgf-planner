@@ -1152,6 +1152,10 @@ a:focus-visible {
   width: 170px;
 }
 
+.event-filter {
+  display: block;
+}
+
 .schedule-draft {
   margin-left: auto;
   display: flex;
@@ -1352,6 +1356,10 @@ a:focus-visible {
   gap: 6px;
   color: var(--ink-500);
   font-size: 10px;
+}
+
+.event-footer .text-button {
+  flex: 0 0 auto;
 }
 
 .add-event-card {
@@ -2361,6 +2369,43 @@ a:focus-visible {
 .candidate-button span { display: flex; flex-direction: column; gap: 2px; }
 .candidate-button small { color: var(--ink-500); }
 .candidate-button > svg { color: var(--blue-700); }
+.candidate-button.candidate-add-group {
+  border-style: dashed;
+  border-color: #d8aa68;
+  background: #fffaf2;
+}
+.candidate-button.candidate-add-group small,
+.candidate-button.candidate-add-group > svg {
+  color: var(--amber-700);
+}
+.blocked-candidates {
+  margin-top: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.candidate-blocked {
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  align-items: center;
+  gap: 10px;
+  border-radius: 10px;
+  padding: 7px 10px;
+  background: #f6f7f8;
+  color: var(--ink-500);
+}
+.candidate-blocked > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.candidate-blocked strong {
+  color: var(--ink-700);
+}
+.candidate-blocked small {
+  color: var(--ink-500);
+}
 .icon-button.danger { color: #b34f4f; }
 
 @media (max-width: 640px) {
