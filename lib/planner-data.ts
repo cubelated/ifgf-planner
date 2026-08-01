@@ -35,8 +35,7 @@ export type PlannerData = {
 };
 
 function fail(message: string, cause?: unknown): never {
-  if (cause instanceof Error) throw cause;
-  throw new Error(message);
+  throw new Error(message, { cause });
 }
 
 export async function loadPlannerData(user: User): Promise<PlannerData> {
@@ -230,7 +229,9 @@ export async function saveVolunteer(input: SaveVolunteerInput) {
   }
 }
 
-export type CreateEventGroupInput = {
+export type SaveEventGroupInput = {
+  id?: string;
+  existingEvent?: EventGroup;
   organizationId: string;
   userId: string;
   timezone: string;
@@ -242,6 +243,8 @@ export type CreateEventGroupInput = {
   weekOccurrences: number[];
   requirements: Array<{ sectionId: string; neededCount: number }>;
 };
+
+export type CreateEventGroupInput = Omit<SaveEventGroupInput, "id" | "existingEvent">;
 
 function calendarDateInTimeZone(timeZone: string) {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -300,7 +303,7 @@ export function generateOccurrenceDates(input: {
   return results;
 }
 
-export async function createEventGroup(input: CreateEventGroupInput) {
+function validateEventGroupInput(input: SaveEventGroupInput) {
   const sectionIds = input.requirements.map((requirement) => requirement.sectionId);
   if (new Set(sectionIds).size !== sectionIds.length) {
     throw new Error("Setiap jenis pelayanan hanya boleh ditambahkan satu kali.");
@@ -308,6 +311,22 @@ export async function createEventGroup(input: CreateEventGroupInput) {
   if (input.requirements.some((requirement) => !Number.isInteger(requirement.neededCount) || requirement.neededCount < 1 || requirement.neededCount > 50)) {
     throw new Error("Jumlah relawan untuk setiap jenis pelayanan harus antara 1 dan 50.");
   }
+}
+
+function eventScheduleChanged(input: SaveEventGroupInput) {
+  const existing = input.existingEvent;
+  if (!existing) return false;
+  const existingWeeks = [...existing.week_occurrences].sort().join(",");
+  const nextWeeks = [...input.weekOccurrences].sort().join(",");
+  return existing.weekday !== input.weekday
+    || existing.start_time.slice(0, 5) !== input.startTime
+    || existing.duration_minutes !== input.durationMinutes
+    || existing.recurrence_pattern !== input.recurrencePattern
+    || existingWeeks !== nextWeeks;
+}
+
+export async function createEventGroup(input: CreateEventGroupInput) {
+  validateEventGroupInput(input);
 
   const supabase = getSupabaseBrowserClient();
   const { data: eventGroup, error } = await supabase
@@ -360,6 +379,128 @@ export async function createEventGroup(input: CreateEventGroupInput) {
   }
 }
 
+export async function updateEventGroup(input: SaveEventGroupInput & { id: string; existingEvent: EventGroup }) {
+  validateEventGroupInput(input);
+  const supabase = getSupabaseBrowserClient();
+  const scheduleChanged = eventScheduleChanged(input);
+
+  const [occurrencesResult, requirementsResult] = await Promise.all([
+    supabase.from("event_occurrences").select("id, starts_at").eq("event_group_id", input.id),
+    supabase.from("staffing_requirements").select("section_id").eq("event_group_id", input.id),
+  ]);
+  if (occurrencesResult.error || requirementsResult.error) {
+    fail("Data kegiatan saat ini tidak dapat diperiksa.", occurrencesResult.error ?? requirementsResult.error);
+  }
+
+  const occurrences = occurrencesResult.data ?? [];
+  const occurrenceIds = occurrences.map((occurrence) => occurrence.id);
+  const futureOccurrenceIds = occurrences
+    .filter((occurrence) => new Date(occurrence.starts_at) >= new Date())
+    .map((occurrence) => occurrence.id);
+  const nextSectionIds = new Set(input.requirements.map((requirement) => requirement.sectionId));
+  const removedSectionIds = (requirementsResult.data ?? [])
+    .map((requirement) => requirement.section_id)
+    .filter((sectionId) => !nextSectionIds.has(sectionId));
+
+  if (scheduleChanged && futureOccurrenceIds.length) {
+    const [assignmentResult, absenceResult] = await Promise.all([
+      supabase.from("assignments").select("id").in("occurrence_id", futureOccurrenceIds).limit(1),
+      supabase.from("unavailability").select("id").in("occurrence_id", futureOccurrenceIds).limit(1),
+    ]);
+    if (assignmentResult.error || absenceResult.error) {
+      fail("Jadwal mendatang tidak dapat diperiksa.", assignmentResult.error ?? absenceResult.error);
+    }
+    if (assignmentResult.data?.length || absenceResult.data?.length) {
+      throw new Error(
+        "Hari, waktu, atau pola belum dapat diubah karena sudah ada penugasan atau ketidakhadiran pada tanggal mendatang. Hapus data tersebut terlebih dahulu.",
+      );
+    }
+  }
+
+  if (removedSectionIds.length && occurrenceIds.length) {
+    const { data: assignedRemovedSections, error } = await supabase
+      .from("assignments")
+      .select("id")
+      .in("occurrence_id", occurrenceIds)
+      .in("section_id", removedSectionIds)
+      .limit(1);
+    if (error) fail("Penugasan untuk kebutuhan kegiatan tidak dapat diperiksa.", error);
+    if (assignedRemovedSections?.length) {
+      throw new Error(
+        "Jenis pelayanan yang sudah memiliki penugasan tidak dapat dihapus. Hapus penugasannya terlebih dahulu.",
+      );
+    }
+  }
+
+  const { error: updateError } = await supabase
+    .from("event_groups")
+    .update({
+      name: input.name.trim(),
+      weekday: input.weekday,
+      start_time: input.startTime,
+      duration_minutes: input.durationMinutes,
+      recurrence_pattern: input.recurrencePattern,
+      week_occurrences: input.weekOccurrences,
+    })
+    .eq("id", input.id);
+  if (updateError) fail("Kegiatan tidak dapat diperbarui.", updateError);
+
+  if (removedSectionIds.length) {
+    const { error } = await supabase
+      .from("staffing_requirements")
+      .delete()
+      .eq("event_group_id", input.id)
+      .in("section_id", removedSectionIds);
+    if (error) fail("Kebutuhan pelayanan yang dihapus tidak dapat disimpan.", error);
+  }
+
+  if (input.requirements.length) {
+    const { error } = await supabase.from("staffing_requirements").upsert(
+      input.requirements.map((requirement) => ({
+        event_group_id: input.id,
+        section_id: requirement.sectionId,
+        needed_count: requirement.neededCount,
+      })),
+      { onConflict: "event_group_id,section_id" },
+    );
+    if (error) fail("Kebutuhan pelayanan tidak dapat diperbarui.", error);
+  }
+
+  if (scheduleChanged) {
+    const now = new Date().toISOString();
+    const { error: deleteError } = await supabase
+      .from("event_occurrences")
+      .delete()
+      .eq("event_group_id", input.id)
+      .gte("starts_at", now);
+    if (deleteError) fail("Tanggal lama kegiatan tidak dapat diperbarui.", deleteError);
+
+    const generated = generateOccurrenceDates({
+      weekday: input.weekday,
+      startTime: input.startTime,
+      durationMinutes: input.durationMinutes,
+      weekOccurrences: input.weekOccurrences,
+      timezone: input.timezone,
+    });
+    const { error: occurrenceError } = await supabase.from("event_occurrences").insert(
+      generated.map((occurrence) => ({
+        organization_id: input.organizationId,
+        event_group_id: input.id,
+        starts_at: occurrence.startsAt,
+        ends_at: occurrence.endsAt,
+      })),
+    );
+    if (occurrenceError) fail("Tanggal baru kegiatan tidak dapat dibuat.", occurrenceError);
+  }
+}
+
+export async function saveEventGroup(input: SaveEventGroupInput) {
+  if (input.id && input.existingEvent) {
+    return updateEventGroup({ ...input, id: input.id, existingEvent: input.existingEvent });
+  }
+  return createEventGroup(input);
+}
+
 export async function submitUnavailability(input: {
   organizationId: string;
   volunteerId: string;
@@ -383,11 +524,23 @@ export async function submitUnavailability(input: {
 
 export async function assignVolunteer(input: {
   organizationId: string;
+  eventGroupId: string;
   occurrenceId: string;
   sectionId: string;
   volunteerId: string;
+  addToEventGroup?: boolean;
 }) {
   const supabase = getSupabaseBrowserClient();
+  if (input.addToEventGroup) {
+    const { error: membershipError } = await supabase.from("event_group_volunteers").upsert(
+      {
+        event_group_id: input.eventGroupId,
+        volunteer_id: input.volunteerId,
+      },
+      { onConflict: "event_group_id,volunteer_id", ignoreDuplicates: true },
+    );
+    if (membershipError) fail("Relawan tidak dapat ditambahkan ke kegiatan ini.", membershipError);
+  }
   const { error } = await supabase.from("assignments").insert({
     organization_id: input.organizationId,
     occurrence_id: input.occurrenceId,
