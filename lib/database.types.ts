@@ -367,6 +367,7 @@ export type Database = {
           id: string
           name: string
           organization_id: string
+          sort_order: number
           updated_at: string
         }
         Insert: {
@@ -375,6 +376,7 @@ export type Database = {
           id?: string
           name: string
           organization_id: string
+          sort_order?: number
           updated_at?: string
         }
         Update: {
@@ -383,6 +385,7 @@ export type Database = {
           id?: string
           name?: string
           organization_id?: string
+          sort_order?: number
           updated_at?: string
         }
         Relationships: [
@@ -578,7 +581,13 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      reorder_service_sections: {
+        Args: {
+          ordered_section_ids: string[]
+          target_organization_id: string
+        }
+        Returns: undefined
+      }
     }
     Enums: {
       [_ in never]: never

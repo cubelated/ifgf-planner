@@ -65,7 +65,13 @@ export async function loadPlannerData(user: User): Promise<PlannerData> {
     await Promise.all([
       supabase.from("profiles").select("*").eq("id", user.id).single(),
       supabase.from("organizations").select("*").eq("id", organizationId).single(),
-      supabase.from("service_sections").select("*").eq("organization_id", organizationId).order("name"),
+      supabase
+        .from("service_sections")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .order("sort_order")
+        .order("created_at")
+        .order("id"),
       supabase.from("volunteers").select("*").eq("organization_id", organizationId).order("full_name"),
       supabase.from("event_groups").select("*").eq("organization_id", organizationId).order("name"),
       supabase
@@ -149,14 +155,28 @@ export async function createServiceSection(input: {
   organizationId: string;
   name: string;
   color?: string;
+  sortOrder: number;
 }) {
   const supabase = getSupabaseBrowserClient();
   const { error } = await supabase.from("service_sections").insert({
     organization_id: input.organizationId,
     name: input.name.trim(),
     color: input.color ?? "blue",
+    sort_order: input.sortOrder,
   });
   if (error) fail("Bagian pelayanan tidak dapat disimpan.", error);
+}
+
+export async function reorderServiceSections(input: {
+  organizationId: string;
+  sectionIds: string[];
+}) {
+  const supabase = getSupabaseBrowserClient();
+  const { error } = await supabase.rpc("reorder_service_sections", {
+    target_organization_id: input.organizationId,
+    ordered_section_ids: input.sectionIds,
+  });
+  if (error) fail("Urutan bagian pelayanan tidak dapat disimpan.", error);
 }
 
 export type SaveVolunteerInput = {
