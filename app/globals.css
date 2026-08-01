@@ -479,6 +479,76 @@ a:focus-visible {
   color: var(--ink-950);
 }
 
+.export-menu {
+  position: relative;
+}
+
+.export-menu > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.export-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.export-menu > summary[aria-disabled="true"] {
+  opacity: 0.5;
+}
+
+.export-options {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 7px);
+  z-index: 20;
+  width: 210px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: white;
+  box-shadow: 0 14px 36px rgb(19 44 62 / 0.16);
+}
+
+.export-options button {
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: transparent;
+  color: var(--ink-700);
+  text-align: left;
+}
+
+.export-options button:hover:not(:disabled) {
+  background: #f2f6f7;
+  color: var(--ink-950);
+}
+
+.export-options button:disabled {
+  opacity: 0.45;
+}
+
+.export-options button > span {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.export-options strong {
+  font-size: 11px;
+}
+
+.export-options small {
+  color: var(--ink-500);
+  font-size: 9px;
+}
+
 .button-dark {
   background: #102b3d;
   color: white;
@@ -1240,22 +1310,30 @@ a:focus-visible {
 }
 
 .schedule-table tbody td {
-  height: 100px;
+  height: auto;
   background: white;
 }
 
 .assignment {
+  display: block;
   width: 100%;
   min-height: 30px;
   margin-bottom: 6px;
   border: 1px solid #d9e4e8;
   border-radius: 7px;
-  padding: 0 9px;
+  padding: 7px 9px;
   background: #f5f9fa;
   color: #31596e;
   font-size: 10px;
   font-weight: 610;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
   text-align: left;
+  white-space: normal;
+}
+
+.schedule-table tbody td > :last-child {
+  margin-bottom: 0;
 }
 
 .assignment:hover {
@@ -2887,6 +2965,20 @@ a:focus-visible {
 
   .page-actions .button {
     flex: 1;
+  }
+
+  .page-actions .export-menu {
+    flex: 1 1 100%;
+  }
+
+  .export-menu > summary {
+    width: 100%;
+  }
+
+  .export-options {
+    left: 0;
+    right: auto;
+    width: 100%;
   }
 
   .metric-grid {
