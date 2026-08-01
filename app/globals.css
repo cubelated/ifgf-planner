@@ -3136,8 +3136,14 @@ a:focus-visible {
   line-height: 1.55;
 }
 
-.month-request-field {
+.request-fields {
   margin: 22px 0 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.month-request-field {
+  margin: 0;
   display: grid;
   gap: 8px;
   color: var(--ink-700);
@@ -3156,6 +3162,13 @@ a:focus-visible {
   padding: 11px 12px;
 }
 
+.month-request-field small {
+  color: var(--ink-500);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
 .request-status {
   margin-bottom: 14px;
   padding: 12px 13px;
@@ -3172,6 +3185,12 @@ a:focus-visible {
   border-color: #b9dfd2;
   background: var(--teal-100);
   color: var(--teal-700);
+}
+
+.request-status.closed {
+  border-color: #f0cf9b;
+  background: var(--amber-100);
+  color: var(--amber-700);
 }
 
 .request-status span {
@@ -3400,6 +3419,16 @@ a:focus-visible {
   margin: 0;
   color: var(--ink-500);
   line-height: 1.6;
+}
+
+.public-form-header > .public-form-deadline {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--amber-700);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .public-unavailability-form {

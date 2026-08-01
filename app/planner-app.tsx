@@ -91,6 +91,7 @@ import {
   type Volunteer,
 } from "@/lib/planner-data";
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase";
+import { isDateAfterExpiry, lastDateOfMonth } from "@/lib/unavailability";
 
 type View =
   | "overview"
@@ -960,11 +961,25 @@ function Volunteers({ data, onAdd, onEdit }: { data: PlannerData; onAdd: () => v
 
 function Unavailability({ data, onChanged, showToast }: { data: PlannerData; onChanged: (message: string) => Promise<void>; showToast: (message: string) => void }) {
   const [month, setMonth] = useState(monthKeyInTimeZone(new Date(), data.organization.timezone));
+  const [expiresOn, setExpiresOn] = useState(() => lastDateOfMonth(
+    monthKeyInTimeZone(new Date(), data.organization.timezone),
+  ));
   const [generatedLink, setGeneratedLink] = useState("");
   const [creating, setCreating] = useState(false);
+  const today = localDateKey(new Date().toISOString(), data.organization.timezone);
+  const monthEndsOn = /^\d{4}-\d{2}$/.test(month) ? lastDateOfMonth(month) : "";
   const currentRequest = data.unavailabilityRequests.find(
     (request) => request.request_month === `${month}-01`,
   );
+  const requestClosedByStatus = Boolean(currentRequest && currentRequest.status !== "open");
+  const requestExpiredByDate = Boolean(
+    currentRequest && isDateAfterExpiry(today, currentRequest.expires_on),
+  );
+  const requestUnavailable = requestClosedByStatus || requestExpiredByDate;
+  const expiryInvalid = !expiresOn
+    || !monthEndsOn
+    || expiresOn < today
+    || expiresOn > monthEndsOn;
   const monthAbsences = data.unavailability.filter(
     (absence) => absence.unavailable_date.startsWith(month),
   );
@@ -1018,6 +1033,7 @@ function Unavailability({ data, onChanged, showToast }: { data: PlannerData; onC
       await createUnavailabilityRequest({
         organizationId: data.organization.id,
         month,
+        expiresOn,
         token,
       });
       const link = `${window.location.origin}/unavailability-form#token=${encodeURIComponent(token)}`;
@@ -1061,28 +1077,46 @@ function Unavailability({ data, onChanged, showToast }: { data: PlannerData; onC
         <div className="card request-link-card">
           <div className="portal-label"><span><UserRound size={17} /></span> FORMULIR BULANAN</div>
           <h2>Buat tautan permintaan</h2>
-          <p>Pilih bulan, buat tautan, lalu kirimkan kepada relawan untuk diisi tanpa login.</p>
+          <p>Pilih bulan dan batas waktu, lalu kirimkan tautannya kepada relawan untuk diisi tanpa login.</p>
 
-          <label className="month-request-field">
-            Bulan formulir
-            <input type="month" value={month} onChange={(event) => { setMonth(event.target.value); setGeneratedLink(""); }} />
-          </label>
+          <div className="request-fields">
+            <label className="month-request-field">
+              Bulan formulir
+              <input type="month" value={month} onChange={(event) => {
+                const nextMonth = event.target.value;
+                if (!nextMonth) return;
+                const nextRequest = data.unavailabilityRequests.find(
+                  (request) => request.request_month === `${nextMonth}-01`,
+                );
+                setMonth(nextMonth);
+                setExpiresOn(nextRequest?.expires_on ?? lastDateOfMonth(nextMonth));
+                setGeneratedLink("");
+              }} required />
+            </label>
+            <label className="month-request-field">
+              Tanggal kedaluwarsa
+              <input type="date" value={expiresOn} min={today} max={monthEndsOn} onChange={(event) => { setExpiresOn(event.target.value); setGeneratedLink(""); }} />
+              <small>Formulir tetap terbuka sampai akhir tanggal ini ({data.organization.timezone}).</small>
+            </label>
+          </div>
 
-          <div className={currentRequest ? "request-status active" : "request-status"}>
-            {currentRequest ? <Check size={17} /> : <CalendarDays size={17} />}
+          <div className={currentRequest ? requestUnavailable ? "request-status closed" : "request-status active" : "request-status"}>
+            {currentRequest && !requestUnavailable ? <Check size={17} /> : <CalendarDays size={17} />}
             <span>
-              <strong>{currentRequest ? "Formulir aktif" : "Belum ada formulir"}</strong>
-              <small>{currentRequest ? `Tautan untuk ${formatMonthKey(month)} sudah pernah dibuat.` : `Buat permintaan untuk ${formatMonthKey(month)}.`}</small>
+              <strong>{currentRequest ? requestUnavailable ? "Formulir sudah ditutup" : "Formulir aktif" : "Belum ada formulir"}</strong>
+              <small>{currentRequest ? requestClosedByStatus ? "Ditutup oleh koordinator." : requestExpiredByDate ? `Kedaluwarsa pada ${formatDateKey(currentRequest.expires_on)}.` : `Terbuka sampai ${formatDateKey(currentRequest.expires_on)}.` : `Buat permintaan untuk ${formatMonthKey(month)}.`}</small>
             </span>
           </div>
 
-          <button className="button button-primary button-block" type="button" onClick={createLink} disabled={creating || !month}>
+          {expiryInvalid ? <p className="form-error" role="alert">Pilih tanggal kedaluwarsa antara hari ini dan akhir bulan formulir.</p> : null}
+
+          <button className="button button-primary button-block" type="button" onClick={createLink} disabled={creating || !month || expiryInvalid}>
             {creating ? <LoaderCircle className="spin" size={17} /> : <Copy size={17} />}
             {creating ? "Membuat tautan..." : currentRequest ? "Buat ulang dan salin tautan" : "Buat dan salin tautan"}
           </button>
 
           {generatedLink ? <div className="generated-link"><label htmlFor="generated-unavailability-link">Tautan siap dibagikan</label><div><input id="generated-unavailability-link" readOnly value={generatedLink} onFocus={(event) => event.currentTarget.select()} /><button className="icon-button" type="button" onClick={copyLink} aria-label="Salin tautan"><Copy size={17} /></button></div></div> : null}
-          {currentRequest ? <p className="link-rotation-note"><ShieldCheck size={15} /> Membuat ulang tautan akan menonaktifkan tautan lama untuk bulan ini. Laporan yang sudah masuk tetap tersimpan.</p> : <p className="link-rotation-note"><ShieldCheck size={15} /> Tautan menggunakan token acak dan hanya menampilkan nama relawan aktif.</p>}
+          {currentRequest ? <p className="link-rotation-note"><ShieldCheck size={15} /> Membuat ulang tautan akan memperbarui tanggal kedaluwarsa dan menonaktifkan tautan lama. Laporan yang sudah masuk tetap tersimpan.</p> : <p className="link-rotation-note"><ShieldCheck size={15} /> Tautan menggunakan token acak, ditutup otomatis setelah batas waktu, dan hanya menampilkan nama relawan aktif.</p>}
         </div>
 
         <div className="card monthly-report-card">

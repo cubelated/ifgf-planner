@@ -512,6 +512,7 @@ export type Database = {
         Row: {
           created_at: string
           created_by: string
+          expires_on: string
           id: string
           organization_id: string
           request_month: string
@@ -522,6 +523,7 @@ export type Database = {
         Insert: {
           created_at?: string
           created_by: string
+          expires_on: string
           id?: string
           organization_id: string
           request_month: string
@@ -532,6 +534,7 @@ export type Database = {
         Update: {
           created_at?: string
           created_by?: string
+          expires_on?: string
           id?: string
           organization_id?: string
           request_month?: string
@@ -638,6 +641,7 @@ export type Database = {
       create_unavailability_request: {
         Args: {
           request_token: string
+          target_expires_on: string
           target_month: string
           target_organization_id: string
         }

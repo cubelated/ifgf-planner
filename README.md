@@ -53,7 +53,7 @@ Only use the Supabase publishable key in the browser. Never expose a secret or s
 - Owner and coordinator mutations are restricted to their organization.
 - Volunteers can report only their own unavailability.
 - Assignment triggers reject inactive, unqualified, unavailable, out-of-group, or cross-organization assignments.
-- Monthly form links store only a SHA-256 token hash in the database and can be rotated without deleting existing responses.
+- Monthly form links store only a SHA-256 token hash, expire on a coordinator-selected date, and can be rotated without deleting existing responses.
 - New share links keep the request token in the URL fragment so it is not included in ordinary page requests; older query-string links remain compatible.
 - Anonymous browsers cannot call the privileged form RPCs directly; a token-validating Edge Function is the only public entry point.
 - The browser uses only the Supabase publishable key; never expose a secret or service-role key.

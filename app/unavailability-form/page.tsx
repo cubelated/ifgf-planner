@@ -4,6 +4,7 @@ import {
   AlertCircle,
   CalendarDays,
   Check,
+  Clock3,
   LoaderCircle,
   Search,
   ShieldCheck,
@@ -14,6 +15,7 @@ import { APP_CONFIG } from "@/lib/config";
 import {
   loadPublicUnavailabilityForm,
   submitPublicUnavailability,
+  type ClosedPublicUnavailabilityForm,
   type PublicUnavailabilityForm,
 } from "@/lib/planner-data";
 import { isSupabaseConfigured } from "@/lib/supabase";
@@ -32,6 +34,15 @@ function formatSelectedDate(dateKey: string) {
     weekday: "short",
     day: "numeric",
     month: "short",
+    timeZone: "UTC",
+  }).format(new Date(`${dateKey}T00:00:00Z`));
+}
+
+function formatFullDate(dateKey: string) {
+  return new Intl.DateTimeFormat("id-ID", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
     timeZone: "UTC",
   }).format(new Date(`${dateKey}T00:00:00Z`));
 }
@@ -69,7 +80,8 @@ function Logo() {
 export default function UnavailabilityFormPage() {
   const [token, setToken] = useState("");
   const [form, setForm] = useState<PublicUnavailabilityForm | null>(null);
-  const [state, setState] = useState<"loading" | "ready" | "error" | "success">("loading");
+  const [closedForm, setClosedForm] = useState<ClosedPublicUnavailabilityForm | null>(null);
+  const [state, setState] = useState<"loading" | "ready" | "closed" | "error" | "success">("loading");
   const [error, setError] = useState("");
   const [name, setName] = useState("");
   const [volunteerId, setVolunteerId] = useState<string | null>(null);
@@ -104,6 +116,11 @@ export default function UnavailabilityFormPage() {
         if (!loadedForm) {
           setError("Tautan formulir tidak valid, sudah ditutup, atau telah diganti.");
           setState("error");
+          return;
+        }
+        if (loadedForm.status === "closed") {
+          setClosedForm(loadedForm);
+          setState("closed");
           return;
         }
         setForm(loadedForm);
@@ -170,7 +187,19 @@ export default function UnavailabilityFormPage() {
       });
       setState("success");
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "Jawaban tidak dapat dikirim.");
+      const message = submitError instanceof Error ? submitError.message : "Jawaban tidak dapat dikirim.";
+      if (/sudah ditutup|kedaluwarsa/i.test(message) && form) {
+        setClosedForm({
+          status: "closed",
+          organizationName: form.organizationName,
+          month: form.month,
+          expiresOn: form.expiresOn,
+          closedReason: /kedaluwarsa/i.test(message) ? "expired" : "closed",
+        });
+        setState("closed");
+      } else {
+        setError(message);
+      }
     } finally {
       setSaving(false);
     }
@@ -182,6 +211,21 @@ export default function UnavailabilityFormPage() {
 
   if (state === "error" && !form) {
     return <main className="public-form-page"><section className="public-form-shell public-form-state"><Logo /><span className="state-icon error"><AlertCircle size={26} /></span><h1>Formulir tidak tersedia</h1><p>{error}</p></section></main>;
+  }
+
+  if (state === "closed" && closedForm) {
+    return (
+      <main className="public-form-page">
+        <section className="public-form-shell public-form-state">
+          <Logo />
+          <span className="state-icon error"><AlertCircle size={26} /></span>
+          <h1>Formulir sudah ditutup</h1>
+          <p>{closedForm.closedReason === "expired"
+            ? `Batas pengisian berakhir pada ${formatFullDate(closedForm.expiresOn)}. Formulir ${formatMonth(closedForm.month)} tidak lagi menerima jawaban.`
+            : `Koordinator sudah menutup formulir ${formatMonth(closedForm.month)}. Tautan ini tidak lagi menerima jawaban.`}</p>
+        </section>
+      </main>
+    );
   }
 
   if (state === "success" && form) {
@@ -209,6 +253,7 @@ export default function UnavailabilityFormPage() {
           <span className="eyebrow"><CalendarDays size={16} /> PERMINTAAN KETERSEDIAAN</span>
           <h1>Tanggal berapa Anda tidak dapat melayani?</h1>
           <p>{form.organizationName} sedang mengumpulkan ketidakhadiran untuk <strong>{formatMonth(form.month)}</strong>.</p>
+          <p className="public-form-deadline"><Clock3 size={15} /> Isi paling lambat {formatFullDate(form.expiresOn)}.</p>
         </header>
 
         <form className="public-unavailability-form" onSubmit={submit}>
