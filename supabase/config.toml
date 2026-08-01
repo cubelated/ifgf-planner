@@ -1,0 +1,4 @@
+project_id = "ifgf-planner"
+
+[functions.unavailability-form]
+verify_jwt = false

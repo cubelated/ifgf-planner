@@ -9,7 +9,8 @@ Indonesian-first volunteer scheduling web app for IFGF church teams. Application
 - Recurring event setup with persisted future occurrences
 - Service sections, volunteer eligibility, and event-group membership management
 - Schedule assignments validated against eligibility, event membership, status, and availability
-- Mobile-oriented “cannot serve” reporting stored in Supabase
+- Shareable monthly unavailability forms with name autocomplete and date selection
+- Month-filtered coordinator reports with assignment-conflict counts
 - Draft/published schedule versions
 - Draft LINE Official Account notification flow
 - Supabase email magic-link login when configured
@@ -30,8 +31,10 @@ Requirements: Node.js 22.13 or newer.
 1. Install dependencies with `npm ci`.
 2. Copy `.env.example` to `.env.local`.
 3. Add a Supabase project URL and publishable key.
-4. For a new Supabase project, link the Supabase CLI and apply the migration in `supabase/migrations`.
-5. Run `npm run dev`.
+4. For a new Supabase project, link the Supabase CLI and run `supabase db push`.
+5. Deploy the public form endpoint with `supabase functions deploy unavailability-form`.
+   The checked-in `supabase/config.toml` disables gateway JWT verification for this function because the random request token is its credential.
+6. Run `npm run dev`.
 
 Without environment variables, the app displays a configuration-required screen. It never falls back to fake data.
 
@@ -50,6 +53,9 @@ Only use the Supabase publishable key in the browser. Never expose a secret or s
 - Owner and coordinator mutations are restricted to their organization.
 - Volunteers can report only their own unavailability.
 - Assignment triggers reject inactive, unqualified, unavailable, out-of-group, or cross-organization assignments.
+- Monthly form links store only a SHA-256 token hash in the database and can be rotated without deleting existing responses.
+- New share links keep the request token in the URL fragment so it is not included in ordinary page requests; older query-string links remain compatible.
+- Anonymous browsers cannot call the privileged form RPCs directly; a token-validating Edge Function is the only public entry point.
 - The browser uses only the Supabase publishable key; never expose a secret or service-role key.
 
 ## Next implementation stages
