@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { Database } from "./database.types";
 
-let browserClient: SupabaseClient | null = null;
+let browserClient: SupabaseClient<Database> | null = null;
 
 export function isSupabaseConfigured() {
   return Boolean(
