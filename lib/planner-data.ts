@@ -588,12 +588,14 @@ export async function deleteEventGroup(eventGroupId: string) {
 export async function createUnavailabilityRequest(input: {
   organizationId: string;
   month: string;
+  expiresOn: string;
   token: string;
 }) {
   const supabase = getSupabaseBrowserClient();
   const { data, error } = await supabase.rpc("create_unavailability_request", {
     target_organization_id: input.organizationId,
     target_month: `${input.month}-01`,
+    target_expires_on: input.expiresOn,
     request_token: input.token,
   });
   if (error) fail("Tautan formulir tidak dapat dibuat.", error);
@@ -601,18 +603,50 @@ export async function createUnavailabilityRequest(input: {
 }
 
 export type PublicUnavailabilityForm = {
+  status: "open";
   organizationName: string;
   month: string;
+  expiresOn: string;
   timezone: string;
   volunteers: Array<{ id: string; name: string }>;
 };
 
-function parsePublicUnavailabilityForm(value: unknown): PublicUnavailabilityForm | null {
+export type ClosedPublicUnavailabilityForm = {
+  status: "closed";
+  organizationName: string;
+  month: string;
+  expiresOn: string;
+  closedReason: "expired" | "closed";
+};
+
+export type PublicUnavailabilityFormResult =
+  | PublicUnavailabilityForm
+  | ClosedPublicUnavailabilityForm;
+
+function parsePublicUnavailabilityForm(value: unknown): PublicUnavailabilityFormResult | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
   if (
-    typeof record.organizationName !== "string"
+    record.status === "closed"
+    && typeof record.organizationName === "string"
+    && typeof record.month === "string"
+    && typeof record.expiresOn === "string"
+    && (record.closedReason === "expired" || record.closedReason === "closed")
+  ) {
+    return {
+      status: "closed",
+      organizationName: record.organizationName,
+      month: record.month,
+      expiresOn: record.expiresOn,
+      closedReason: record.closedReason,
+    };
+  }
+
+  if (
+    record.status !== "open"
+    || typeof record.organizationName !== "string"
     || typeof record.month !== "string"
+    || typeof record.expiresOn !== "string"
     || typeof record.timezone !== "string"
     || !Array.isArray(record.volunteers)
   ) return null;
@@ -625,8 +659,10 @@ function parsePublicUnavailabilityForm(value: unknown): PublicUnavailabilityForm
   });
 
   return {
+    status: "open",
     organizationName: record.organizationName,
     month: record.month,
+    expiresOn: record.expiresOn,
     timezone: record.timezone,
     volunteers,
   };
@@ -637,8 +673,26 @@ export async function loadPublicUnavailabilityForm(token: string) {
   const { data, error } = await supabase.functions.invoke("unavailability-form", {
     body: { action: "load", token },
   });
-  if (error) fail("Formulir ketidakhadiran tidak dapat dibuka.", error);
+  if (error) {
+    throw new Error(
+      await publicFunctionErrorMessage(error, "Formulir ketidakhadiran tidak dapat dibuka."),
+      { cause: error },
+    );
+  }
   return parsePublicUnavailabilityForm(data);
+}
+
+async function publicFunctionErrorMessage(error: unknown, fallback: string) {
+  if (!error || typeof error !== "object" || !("context" in error)) return fallback;
+  const context = (error as { context?: unknown }).context;
+  if (!(context instanceof Response)) return fallback;
+
+  try {
+    const payload = await context.clone().json() as { error?: unknown } | null;
+    return payload && typeof payload.error === "string" ? payload.error : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export async function submitPublicUnavailability(input: {
@@ -659,7 +713,12 @@ export async function submitPublicUnavailability(input: {
       reason: input.reason?.trim() ?? "",
     },
   });
-  if (error) fail("Ketidakhadiran tidak dapat dikirim.", error);
+  if (error) {
+    throw new Error(
+      await publicFunctionErrorMessage(error, "Ketidakhadiran tidak dapat dikirim."),
+      { cause: error },
+    );
+  }
   return data;
 }
 

@@ -52,6 +52,15 @@ async function callRpc<T>(functionName: string, body: Record<string, unknown>): 
     const message = result && typeof result === "object" && "message" in result
       ? String(result.message)
       : "Database request failed.";
+    if (message === "UNAVAILABILITY_FORM_EXPIRED") {
+      throw new RequestError(
+        "Formulir ini sudah ditutup karena melewati tanggal kedaluwarsa.",
+        410,
+      );
+    }
+    if (message === "UNAVAILABILITY_FORM_CLOSED") {
+      throw new RequestError("Formulir ini sudah ditutup oleh koordinator.", 410);
+    }
     throw new RequestError(message, response.status >= 500 ? 500 : 400);
   }
 
