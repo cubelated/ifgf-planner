@@ -301,6 +301,14 @@ export function generateOccurrenceDates(input: {
 }
 
 export async function createEventGroup(input: CreateEventGroupInput) {
+  const sectionIds = input.requirements.map((requirement) => requirement.sectionId);
+  if (new Set(sectionIds).size !== sectionIds.length) {
+    throw new Error("Setiap jenis pelayanan hanya boleh ditambahkan satu kali.");
+  }
+  if (input.requirements.some((requirement) => !Number.isInteger(requirement.neededCount) || requirement.neededCount < 1 || requirement.neededCount > 50)) {
+    throw new Error("Jumlah relawan untuk setiap jenis pelayanan harus antara 1 dan 50.");
+  }
+
   const supabase = getSupabaseBrowserClient();
   const { data: eventGroup, error } = await supabase
     .from("event_groups")

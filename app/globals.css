@@ -2218,19 +2218,121 @@ a:focus-visible {
 
 .requirement-options {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 13px;
 }
 
-.requirement-options label {
+.requirement-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.requirement-heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.requirement-heading strong,
+.requirement-empty strong {
+  color: var(--ink-950);
+  font-size: 12px;
+}
+
+.requirement-heading span,
+.requirement-empty small {
+  color: var(--ink-500);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.button-compact {
+  min-height: 36px;
+  padding-inline: 11px;
+  white-space: nowrap;
+}
+
+.requirement-list {
   display: grid;
-  grid-template-columns: 1fr 64px;
+  gap: 9px;
+}
+
+.requirement-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) 130px 36px;
+  align-items: center;
+  gap: 9px;
+}
+
+.requirement-row > select {
+  min-width: 0;
+}
+
+.number-stepper {
+  height: 44px;
+  display: grid;
+  grid-template-columns: 36px 1fr 36px;
+  overflow: hidden;
+  border: 1px solid var(--line-dark);
+  border-radius: 9px;
+  background: white;
+}
+
+.number-stepper button {
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: var(--surface-soft);
+  color: var(--blue-700);
+}
+
+.number-stepper button:hover:not(:disabled) {
+  background: var(--blue-100);
+}
+
+.number-stepper button:disabled {
+  color: var(--ink-500);
+  opacity: 0.45;
+}
+
+.number-stepper input {
+  min-width: 0;
+  min-height: 42px;
+  border-width: 0 1px !important;
+  border-radius: 0 !important;
+  padding: 0 3px !important;
+  text-align: center;
+  appearance: textfield;
+}
+
+.number-stepper input::-webkit-inner-spin-button,
+.number-stepper input::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.requirement-remove {
+  width: 36px;
+  height: 36px;
+}
+
+.requirement-empty {
+  min-height: 64px;
+  display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 13px;
+  border: 1px dashed var(--line-dark);
+  border-radius: 9px;
+  padding: 12px;
+  color: var(--ink-500);
 }
 
-.requirement-options input { height: 38px; text-align: center; }
+.requirement-empty > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
 
 .assignment-manager {
   display: flex;
@@ -2266,7 +2368,11 @@ a:focus-visible {
   .state-page pre { max-width: 100%; overflow-x: auto; font-size: 11px; }
   .state-actions,
   .section-form { width: 100%; flex-direction: column; }
-  .requirement-options { grid-template-columns: 1fr; }
+  .requirement-heading { align-items: flex-start; flex-direction: column; }
+  .requirement-heading .button { width: 100%; }
+  .requirement-row { grid-template-columns: minmax(0, 1fr) 36px; }
+  .requirement-row > select { grid-column: 1 / -1; }
+  .number-stepper { min-width: 0; }
 }
 @keyframes toast-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 
