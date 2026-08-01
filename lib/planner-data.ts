@@ -19,6 +19,7 @@ export type EventGroupVolunteer = Tables<"event_group_volunteers">;
 export type StaffingRequirement = Tables<"staffing_requirements">;
 export type EventOccurrence = Tables<"event_occurrences">;
 export type Unavailability = Tables<"unavailability">;
+export type UnavailabilityRequest = Tables<"unavailability_requests">;
 export type ScheduleVersion = Tables<"schedule_versions">;
 export type Assignment = Tables<"assignments">;
 
@@ -36,6 +37,7 @@ export type PlannerData = {
   requirements: StaffingRequirement[];
   occurrences: EventOccurrence[];
   unavailability: Unavailability[];
+  unavailabilityRequests: UnavailabilityRequest[];
   assignments: Assignment[];
   scheduleVersions: ScheduleVersion[];
 };
@@ -67,7 +69,7 @@ export async function loadPlannerData(user: User): Promise<PlannerData> {
   const rangeEnd = new Date();
   rangeEnd.setDate(rangeEnd.getDate() + 550);
 
-  const [profileResult, organizationResult, sectionsResult, volunteersResult, eventsResult, occurrencesResult, absencesResult, assignmentsResult, versionsResult] =
+  const [profileResult, organizationResult, sectionsResult, volunteersResult, eventsResult, occurrencesResult, absencesResult, requestsResult, assignmentsResult, versionsResult] =
     await Promise.all([
       supabase.from("profiles").select("*").eq("id", user.id).single(),
       supabase.from("organizations").select("*").eq("id", organizationId).single(),
@@ -93,6 +95,11 @@ export async function loadPlannerData(user: User): Promise<PlannerData> {
         .eq("organization_id", organizationId)
         .order("created_at", { ascending: false }),
       supabase
+        .from("unavailability_requests")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .order("request_month", { ascending: false }),
+      supabase
         .from("assignments")
         .select("*")
         .eq("organization_id", organizationId)
@@ -112,6 +119,7 @@ export async function loadPlannerData(user: User): Promise<PlannerData> {
     eventsResult.error,
     occurrencesResult.error,
     absencesResult.error,
+    requestsResult.error,
     assignmentsResult.error,
     versionsResult.error,
   ].filter(Boolean);
@@ -152,6 +160,7 @@ export async function loadPlannerData(user: User): Promise<PlannerData> {
     requirements: requirementsResult.data ?? [],
     occurrences: occurrencesResult.data ?? [],
     unavailability: absencesResult.data ?? [],
+    unavailabilityRequests: requestsResult.data ?? [],
     assignments: assignmentsResult.data ?? [],
     scheduleVersions: versionsResult.data ?? [],
   };
@@ -576,25 +585,82 @@ export async function deleteEventGroup(eventGroupId: string) {
   if (!data) throw new Error("Kegiatan tidak ditemukan atau Anda tidak memiliki izin untuk menghapusnya.");
 }
 
-export async function submitUnavailability(input: {
+export async function createUnavailabilityRequest(input: {
   organizationId: string;
-  volunteerId: string;
-  occurrences: EventOccurrence[];
+  month: string;
+  token: string;
+}) {
+  const supabase = getSupabaseBrowserClient();
+  const { data, error } = await supabase.rpc("create_unavailability_request", {
+    target_organization_id: input.organizationId,
+    target_month: `${input.month}-01`,
+    request_token: input.token,
+  });
+  if (error) fail("Tautan formulir tidak dapat dibuat.", error);
+  return data;
+}
+
+export type PublicUnavailabilityForm = {
+  organizationName: string;
+  month: string;
+  timezone: string;
+  volunteers: Array<{ id: string; name: string }>;
+};
+
+function parsePublicUnavailabilityForm(value: unknown): PublicUnavailabilityForm | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.organizationName !== "string"
+    || typeof record.month !== "string"
+    || typeof record.timezone !== "string"
+    || !Array.isArray(record.volunteers)
+  ) return null;
+
+  const volunteers = record.volunteers.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+    const volunteer = candidate as Record<string, unknown>;
+    if (typeof volunteer.id !== "string" || typeof volunteer.name !== "string") return [];
+    return [{ id: volunteer.id, name: volunteer.name }];
+  });
+
+  return {
+    organizationName: record.organizationName,
+    month: record.month,
+    timezone: record.timezone,
+    volunteers,
+  };
+}
+
+export async function loadPublicUnavailabilityForm(token: string) {
+  const supabase = getSupabaseBrowserClient();
+  const { data, error } = await supabase.functions.invoke("unavailability-form", {
+    body: { action: "load", token },
+  });
+  if (error) fail("Formulir ketidakhadiran tidak dapat dibuka.", error);
+  return parsePublicUnavailabilityForm(data);
+}
+
+export async function submitPublicUnavailability(input: {
+  token: string;
+  name: string;
+  volunteerId: string | null;
+  dates: string[];
   reason?: string;
 }) {
-  if (!input.occurrences.length) return;
   const supabase = getSupabaseBrowserClient();
-  const { error } = await supabase.from("unavailability").upsert(
-    input.occurrences.map((occurrence) => ({
-      organization_id: input.organizationId,
-      volunteer_id: input.volunteerId,
-      occurrence_id: occurrence.id,
-      unavailable_date: occurrence.starts_at.slice(0, 10),
-      reason: input.reason?.trim() || null,
-    })),
-    { onConflict: "volunteer_id,occurrence_id" },
-  );
-  if (error) fail("Ketidakhadiran tidak dapat disimpan.", error);
+  const { data, error } = await supabase.functions.invoke("unavailability-form", {
+    body: {
+      action: "submit",
+      token: input.token,
+      name: input.name.trim(),
+      volunteerId: input.volunteerId,
+      dates: input.dates,
+      reason: input.reason?.trim() ?? "",
+    },
+  });
+  if (error) fail("Ketidakhadiran tidak dapat dikirim.", error);
+  return data;
 }
 
 export async function assignVolunteer(input: {

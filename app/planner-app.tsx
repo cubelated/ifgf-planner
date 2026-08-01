@@ -64,6 +64,7 @@ import { APP_CONFIG } from "@/lib/config";
 import { translate, type MessageKey } from "@/lib/i18n";
 import {
   assignVolunteer,
+  createUnavailabilityRequest,
   createServiceSection,
   deleteEventGroup,
   generateEventMonth,
@@ -77,7 +78,6 @@ import {
   removeAssignment,
   saveEventGroup,
   saveVolunteer,
-  submitUnavailability,
   type EventGroup,
   type EventDeletionImpact,
   type EventOccurrence,
@@ -106,7 +106,7 @@ const NAV_ITEMS: Array<{
   { key: "schedule", label: "schedule", icon: CalendarDays },
   { key: "events", label: "events", icon: CalendarCheck, coordinatorOnly: true },
   { key: "volunteers", label: "volunteers", icon: Users, coordinatorOnly: true },
-  { key: "unavailability", label: "unavailability", icon: UserRound },
+  { key: "unavailability", label: "unavailability", icon: UserRound, coordinatorOnly: true },
   { key: "notifications", label: "notifications", icon: Bell, coordinatorOnly: true },
 ];
 
@@ -172,6 +172,34 @@ function formatMonthKey(monthKey: string) {
     year: "numeric",
     timeZone: "UTC",
   }).format(new Date(Date.UTC(year, month - 1, 1)));
+}
+
+function localDateKey(value: string, timezone: string) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(value));
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function formatDateKey(dateKey: string) {
+  return new Intl.DateTimeFormat("id-ID", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(`${dateKey}T00:00:00Z`));
+}
+
+function createRequestToken() {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join("");
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 }
 
 function defaultScheduleMonth(data: PlannerData, eventGroupId: string) {
@@ -407,7 +435,7 @@ export default function PlannerApp() {
           {view === "schedule" ? <Schedule data={data} canManage={canManage} onAssign={setAssignmentTarget} onChanged={changed} showToast={showToast} /> : null}
           {view === "events" && canManage ? <Events data={data} onAdd={() => setEventDialog("new")} onEdit={setEventDialog} onDelete={setEventDeleteTarget} /> : null}
           {view === "volunteers" && canManage ? <Volunteers data={data} onAdd={() => setVolunteerDialog("new")} onEdit={setVolunteerDialog} /> : null}
-          {view === "unavailability" ? <Unavailability data={data} onChanged={changed} showToast={showToast} /> : null}
+          {view === "unavailability" && canManage ? <Unavailability data={data} onChanged={changed} showToast={showToast} /> : null}
           {view === "notifications" && canManage ? <Notifications showToast={showToast} /> : null}
           {view === "settings" && canManage ? <SettingsView key={data.sections.map((section) => section.id).join("|")} data={data} onChanged={changed} /> : null}
         </main>
@@ -700,27 +728,160 @@ function Volunteers({ data, onAdd, onEdit }: { data: PlannerData; onAdd: () => v
 }
 
 function Unavailability({ data, onChanged, showToast }: { data: PlannerData; onChanged: (message: string) => Promise<void>; showToast: (message: string) => void }) {
-  const [selected, setSelected] = useState<string[]>([]);
-  const [reason, setReason] = useState("");
-  const [saving, setSaving] = useState(false);
-  const upcoming = data.occurrences.filter((occurrence) => new Date(occurrence.starts_at) >= new Date()).slice(0, 12);
-  const existing = new Set(data.unavailability.filter((absence) => absence.volunteer_id === data.currentVolunteer?.id).map((absence) => absence.occurrence_id));
-  async function save() {
-    if (!data.currentVolunteer) return;
-    setSaving(true);
-    try {
-      await submitUnavailability({ organizationId: data.organization.id, volunteerId: data.currentVolunteer.id, occurrences: upcoming.filter((occurrence) => selected.includes(occurrence.id)), reason });
-      setSelected([]); setReason("");
-      await onChanged("Ketidakhadiran berhasil disimpan.");
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : "Ketidakhadiran tidak dapat disimpan.");
-    } finally { setSaving(false); }
-  }
-  return <><PageHeader title="Ketidakhadiran" description="Laporkan tanggal ketika Anda tidak dapat melayani." actions={<button className="button button-secondary" type="button" onClick={() => { void navigator.clipboard?.writeText(window.location.href); showToast("Tautan portal relawan disalin."); }}><Copy size={17} /> Salin tautan</button>} /><section className="absence-grid"><div className="card absence-form-card"><div className="portal-label"><span><UserRound size={17} /></span> TAMPILAN RELAWAN</div><h2>Kapan Anda tidak dapat melayani?</h2><p>Pilih satu atau beberapa kegiatan yang akan datang.</p>{!data.currentVolunteer ? <div className="inline-alert"><AlertCircle size={18} /><span>Akun ini belum ditautkan ke profil relawan.</span></div> : !upcoming.length ? <EmptyState icon={CalendarDays} title="Belum ada tanggal" description="Koordinator belum membuat kegiatan mendatang." /> : <><div className="date-picker-row">{upcoming.map((occurrence) => { const date = new Date(occurrence.starts_at); const isExisting = existing.has(occurrence.id); const isSelected = selected.includes(occurrence.id); const eventName = data.events.find((event) => event.id === occurrence.event_group_id)?.name; return <button key={occurrence.id} type="button" disabled={isExisting} className={isSelected || isExisting ? "selected" : ""} onClick={() => setSelected((current) => current.includes(occurrence.id) ? current.filter((id) => id !== occurrence.id) : [...current, occurrence.id])} aria-pressed={isSelected || isExisting} title={eventName}><span>{new Intl.DateTimeFormat("id-ID", { timeZone: data.organization.timezone, weekday: "short" }).format(date)}</span><strong>{new Intl.DateTimeFormat("id-ID", { timeZone: data.organization.timezone, day: "2-digit" }).format(date)}</strong><small>{new Intl.DateTimeFormat("id-ID", { timeZone: data.organization.timezone, month: "short" }).format(date)}</small><em>{isExisting ? "Tercatat" : eventName}</em>{isSelected || isExisting ? <i><Check size={11} /></i> : null}</button>; })}</div><label className="reason-field">Catatan untuk koordinator <span>(opsional)</span><textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} placeholder="Contoh: Sedang berada di luar kota" /></label><button className="button button-primary button-block" type="button" disabled={!selected.length || saving} onClick={save}><Check size={17} /> {saving ? "Menyimpan..." : "Laporkan tidak tersedia"}</button></>}<p className="privacy-note"><ShieldCheck size={15} /> Catatan hanya dapat dilihat oleh koordinator.</p></div><div className="card absence-list-card"><div className="card-heading"><div><h2>Laporan terbaru</h2><p>Data ketidakhadiran yang tersimpan.</p></div><StatusPill tone="attention">{data.unavailability.length}</StatusPill></div>{data.unavailability.length ? <div className="absence-list">{data.unavailability.slice(0, 10).map((absence, index) => { const volunteer = data.volunteers.find((item) => item.id === absence.volunteer_id); const occurrence = data.occurrences.find((item) => item.id === absence.occurrence_id); const affected = data.assignments.some((assignment) => assignment.volunteer_id === absence.volunteer_id && assignment.occurrence_id === absence.occurrence_id); return <AbsenceItem key={absence.id} name={volunteer?.full_name ?? "Relawan"} date={occurrence ? formatDate(occurrence.starts_at, data.organization.timezone) : absence.unavailable_date} reason={absence.reason || "Tanpa catatan"} impact={affected ? "Sudah terjadwal • perlu pengganti" : "Belum ada bentrok jadwal"} tone={index} urgent={affected} />; })}</div> : <EmptyState icon={Check} title="Belum ada laporan" description="Ketidakhadiran yang dikirim relawan akan muncul di sini." />}</div></section></>;
-}
+  const [month, setMonth] = useState(monthKeyInTimeZone(new Date(), data.organization.timezone));
+  const [generatedLink, setGeneratedLink] = useState("");
+  const [creating, setCreating] = useState(false);
+  const currentRequest = data.unavailabilityRequests.find(
+    (request) => request.request_month === `${month}-01`,
+  );
+  const monthAbsences = data.unavailability.filter(
+    (absence) => absence.unavailable_date.startsWith(month),
+  );
 
-function AbsenceItem({ name, date, reason, impact, tone, urgent = false }: { name: string; date: string; reason: string; impact: string; tone: number; urgent?: boolean }) {
-  return <article className="absence-item"><Avatar name={name} tone={tone} /><div><h3>{name}</h3><p><CalendarDays size={14} /> {date}</p><small>{reason}</small><span className={urgent ? "impact urgent" : "impact"}>{urgent ? <AlertCircle size={13} /> : <Check size={13} />}{impact}</span></div></article>;
+  const reportGroups = useMemo(() => {
+    const groups = new Map<string, {
+      name: string;
+      volunteerId: string | null;
+      dates: Set<string>;
+      reason: string | null;
+    }>();
+
+    for (const absence of monthAbsences) {
+      const volunteer = data.volunteers.find((item) => item.id === absence.volunteer_id);
+      const name = volunteer?.full_name ?? absence.submitted_name ?? "Nama tidak diketahui";
+      const identity = absence.volunteer_id ?? name.trim().toLocaleLowerCase("id-ID");
+      const key = `${absence.request_id ?? "legacy"}:${identity}`;
+      const group = groups.get(key) ?? {
+        name,
+        volunteerId: absence.volunteer_id,
+        dates: new Set<string>(),
+        reason: absence.reason,
+      };
+      group.dates.add(absence.unavailable_date);
+      if (!group.reason && absence.reason) group.reason = absence.reason;
+      groups.set(key, group);
+    }
+
+    return Array.from(groups.values())
+      .map((group) => {
+        const dates = Array.from(group.dates).sort();
+        const affectedAssignments = group.volunteerId
+          ? data.assignments.filter((assignment) => {
+              if (assignment.volunteer_id !== group.volunteerId) return false;
+              const occurrence = data.occurrences.find((item) => item.id === assignment.occurrence_id);
+              return Boolean(
+                occurrence
+                && dates.includes(localDateKey(occurrence.starts_at, data.organization.timezone)),
+              );
+            }).length
+          : 0;
+        return { ...group, dates, affectedAssignments };
+      })
+      .sort((left, right) => left.name.localeCompare(right.name, "id-ID"));
+  }, [data.assignments, data.occurrences, data.organization.timezone, data.volunteers, monthAbsences]);
+
+  async function createLink() {
+    setCreating(true);
+    try {
+      const token = createRequestToken();
+      await createUnavailabilityRequest({
+        organizationId: data.organization.id,
+        month,
+        token,
+      });
+      const link = `${window.location.origin}/unavailability-form#token=${encodeURIComponent(token)}`;
+      setGeneratedLink(link);
+      let copied = false;
+      try {
+        await navigator.clipboard?.writeText(link);
+        copied = Boolean(navigator.clipboard);
+      } catch {
+        // The link remains visible so it can still be copied manually.
+      }
+      await onChanged(
+        copied
+          ? `Tautan formulir ${formatMonthKey(month)} dibuat dan disalin.`
+          : `Tautan formulir ${formatMonthKey(month)} berhasil dibuat.`,
+      );
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Tautan formulir tidak dapat dibuat.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function copyLink() {
+    if (!generatedLink) return;
+    try {
+      await navigator.clipboard?.writeText(generatedLink);
+      showToast(navigator.clipboard ? "Tautan formulir disalin." : "Pilih dan salin tautan secara manual.");
+    } catch {
+      showToast("Pilih dan salin tautan secara manual.");
+    }
+  }
+
+  return (
+    <>
+      <PageHeader
+        title="Ketidakhadiran"
+        description="Buat formulir bulanan untuk relawan dan periksa jawabannya per bulan."
+      />
+      <section className="unavailability-workspace">
+        <div className="card request-link-card">
+          <div className="portal-label"><span><UserRound size={17} /></span> FORMULIR BULANAN</div>
+          <h2>Buat tautan permintaan</h2>
+          <p>Pilih bulan, buat tautan, lalu kirimkan kepada relawan untuk diisi tanpa login.</p>
+
+          <label className="month-request-field">
+            Bulan formulir
+            <input type="month" value={month} onChange={(event) => { setMonth(event.target.value); setGeneratedLink(""); }} />
+          </label>
+
+          <div className={currentRequest ? "request-status active" : "request-status"}>
+            {currentRequest ? <Check size={17} /> : <CalendarDays size={17} />}
+            <span>
+              <strong>{currentRequest ? "Formulir aktif" : "Belum ada formulir"}</strong>
+              <small>{currentRequest ? `Tautan untuk ${formatMonthKey(month)} sudah pernah dibuat.` : `Buat permintaan untuk ${formatMonthKey(month)}.`}</small>
+            </span>
+          </div>
+
+          <button className="button button-primary button-block" type="button" onClick={createLink} disabled={creating || !month}>
+            {creating ? <LoaderCircle className="spin" size={17} /> : <Copy size={17} />}
+            {creating ? "Membuat tautan..." : currentRequest ? "Buat ulang dan salin tautan" : "Buat dan salin tautan"}
+          </button>
+
+          {generatedLink ? <div className="generated-link"><label htmlFor="generated-unavailability-link">Tautan siap dibagikan</label><div><input id="generated-unavailability-link" readOnly value={generatedLink} onFocus={(event) => event.currentTarget.select()} /><button className="icon-button" type="button" onClick={copyLink} aria-label="Salin tautan"><Copy size={17} /></button></div></div> : null}
+          {currentRequest ? <p className="link-rotation-note"><ShieldCheck size={15} /> Membuat ulang tautan akan menonaktifkan tautan lama untuk bulan ini. Laporan yang sudah masuk tetap tersimpan.</p> : <p className="link-rotation-note"><ShieldCheck size={15} /> Tautan menggunakan token acak dan hanya menampilkan nama relawan aktif.</p>}
+        </div>
+
+        <div className="card monthly-report-card">
+          <div className="card-heading monthly-report-heading">
+            <div><h2>Laporan {formatMonthKey(month)}</h2><p>Nama dan tanggal ketidakhadiran yang sudah dikirim.</p></div>
+            <StatusPill tone="attention">{reportGroups.length} orang</StatusPill>
+          </div>
+          <div className="report-summary">
+            <span><strong>{monthAbsences.length}</strong> tanggal tidak tersedia</span>
+            <span><strong>{reportGroups.reduce((total, group) => total + group.affectedAssignments, 0)}</strong> penugasan perlu diperiksa</span>
+          </div>
+          {reportGroups.length ? (
+            <div className="monthly-absence-list">
+              {reportGroups.map((group, index) => (
+                <article className="monthly-absence-item" key={`${group.name}-${group.dates.join("-")}`}>
+                  <Avatar name={group.name} tone={index} />
+                  <div className="monthly-absence-content">
+                    <div className="monthly-absence-title"><h3>{group.name}</h3><StatusPill tone={group.volunteerId ? "ready" : "neutral"}>{group.volunteerId ? "Relawan terhubung" : "Nama manual"}</StatusPill></div>
+                    <div className="absence-date-chips">{group.dates.map((date) => <span key={date}><CalendarDays size={13} /> {formatDateKey(date)}</span>)}</div>
+                    {group.reason ? <p>{group.reason}</p> : null}
+                    <small className={group.affectedAssignments ? "report-impact urgent" : "report-impact"}>{group.affectedAssignments ? <AlertCircle size={14} /> : <Check size={14} />}{group.affectedAssignments ? `${group.affectedAssignments} penugasan perlu pengganti` : group.volunteerId ? "Tidak ada bentrok penugasan" : "Cocokkan nama ini dengan relawan bila diperlukan"}</small>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : <EmptyState icon={CalendarDays} title="Belum ada jawaban" description={`Jawaban formulir ${formatMonthKey(month)} akan muncul di sini.`} />}
+        </div>
+      </section>
+    </>
+  );
 }
 
 function Notifications({ showToast }: { showToast: (message: string) => void }) {
@@ -904,7 +1065,15 @@ function AssignmentDialog({ data, target, onClose, onChanged }: { data: PlannerD
   const existing = assignmentsFor(data, target.occurrence.id, target.section.id);
   const assignedHere = new Set(existing.map((assignment) => assignment.volunteer_id));
   const occurrenceAssignments = assignmentsFor(data, target.occurrence.id);
-  const unavailable = new Set(data.unavailability.filter((absence) => absence.occurrence_id === target.occurrence.id).map((absence) => absence.volunteer_id));
+  const occurrenceDate = localDateKey(target.occurrence.starts_at, data.organization.timezone);
+  const unavailable = new Set(
+    data.unavailability
+      .filter((absence) => absence.volunteer_id && (
+        absence.occurrence_id === target.occurrence.id
+        || absence.unavailable_date === occurrenceDate
+      ))
+      .map((absence) => absence.volunteer_id as string),
+  );
   const eligible = new Set(data.eligibilities.filter((item) => item.section_id === target.section.id).map((item) => item.volunteer_id));
   const groupMembers = new Set(data.eventGroupVolunteers.filter((item) => item.event_group_id === target.occurrence.event_group_id).map((item) => item.volunteer_id));
   const qualified = data.volunteers.filter((volunteer) => eligible.has(volunteer.id));

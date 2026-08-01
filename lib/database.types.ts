@@ -444,32 +444,38 @@ export type Database = {
         Row: {
           created_at: string
           id: string
-          occurrence_id: string
+          occurrence_id: string | null
           organization_id: string
           reason: string | null
+          request_id: string | null
+          submitted_name: string | null
           unavailable_date: string
           updated_at: string
-          volunteer_id: string
+          volunteer_id: string | null
         }
         Insert: {
           created_at?: string
           id?: string
-          occurrence_id: string
+          occurrence_id?: string | null
           organization_id: string
           reason?: string | null
+          request_id?: string | null
+          submitted_name?: string | null
           unavailable_date: string
           updated_at?: string
-          volunteer_id: string
+          volunteer_id?: string | null
         }
         Update: {
           created_at?: string
           id?: string
-          occurrence_id?: string
+          occurrence_id?: string | null
           organization_id?: string
           reason?: string | null
+          request_id?: string | null
+          submitted_name?: string | null
           unavailable_date?: string
           updated_at?: string
-          volunteer_id?: string
+          volunteer_id?: string | null
         }
         Relationships: [
           {
@@ -487,10 +493,58 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "unavailability_request_id_fkey"
+            columns: ["request_id"]
+            isOneToOne: false
+            referencedRelation: "unavailability_requests"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "unavailability_volunteer_id_fkey"
             columns: ["volunteer_id"]
             isOneToOne: false
             referencedRelation: "volunteers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      unavailability_requests: {
+        Row: {
+          created_at: string
+          created_by: string
+          id: string
+          organization_id: string
+          request_month: string
+          status: string
+          token_hash: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          id?: string
+          organization_id: string
+          request_month: string
+          status?: string
+          token_hash: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          id?: string
+          organization_id?: string
+          request_month?: string
+          status?: string
+          token_hash?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "unavailability_requests_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
             referencedColumns: ["id"]
           },
         ]
@@ -581,12 +635,34 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      create_unavailability_request: {
+        Args: {
+          request_token: string
+          target_month: string
+          target_organization_id: string
+        }
+        Returns: string
+      }
+      get_unavailability_form: {
+        Args: { request_token: string }
+        Returns: Json
+      }
       reorder_service_sections: {
         Args: {
           ordered_section_ids: string[]
           target_organization_id: string
         }
         Returns: undefined
+      }
+      submit_unavailability_form: {
+        Args: {
+          request_token: string
+          respondent_name: string
+          response_reason: string
+          selected_volunteer_id: string | null
+          unavailable_dates: string[]
+        }
+        Returns: Json
       }
     }
     Enums: {
