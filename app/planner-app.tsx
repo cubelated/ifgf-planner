@@ -29,7 +29,11 @@ import {
   Clock3,
   Copy,
   Database,
+  Download,
+  FileSpreadsheet,
+  FileText,
   GripVertical,
+  Image as ImageIcon,
   LayoutDashboard,
   LoaderCircle,
   LogOut,
@@ -60,6 +64,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import type { SheetData } from "write-excel-file/browser";
 import { APP_CONFIG } from "@/lib/config";
 import { translate, type MessageKey } from "@/lib/i18n";
 import {
@@ -215,6 +220,165 @@ function defaultScheduleMonth(data: PlannerData, eventGroupId: string) {
 function recurrenceLabel(event: EventGroup) {
   const pattern = PATTERN_OPTIONS.find((option) => option.value === event.recurrence_pattern);
   return `${pattern?.label ?? "Pola khusus"} • ${event.start_time.slice(0, 5)}`;
+}
+
+type ScheduleExportFormat = "xlsx" | "csv" | "png";
+
+type ScheduleExportRow = {
+  volunteerType: string;
+  volunteerNames: string[];
+};
+
+function safeExportFileName(value: string) {
+  const normalized = value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "jadwal";
+}
+
+function downloadBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+}
+
+function csvCell(value: string) {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+function createScheduleCsv(eventName: string, month: string, dates: string[], rows: ScheduleExportRow[]) {
+  return [
+    [eventName],
+    [`Jadwal pelayanan • ${month}`],
+    [],
+    ["Jenis relawan", ...dates],
+    ...rows.map((row) => [row.volunteerType, ...row.volunteerNames]),
+  ].map((row) => row.map(csvCell).join(",")).join("\r\n");
+}
+
+function wrapCanvasText(context: CanvasRenderingContext2D, value: string, maxWidth: number) {
+  const lines: string[] = [];
+  for (const paragraph of value.split("\n")) {
+    const words = paragraph.trim().split(/\s+/).filter(Boolean);
+    if (!words.length) {
+      lines.push("");
+      continue;
+    }
+    let line = "";
+    for (const word of words) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (!line || context.measureText(candidate).width <= maxWidth) {
+        line = candidate;
+      } else {
+        lines.push(line);
+        line = word;
+      }
+    }
+    if (line) lines.push(line);
+  }
+  return lines;
+}
+
+function createScheduleImage(eventName: string, month: string, dates: string[], rows: ScheduleExportRow[]) {
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Browser tidak mendukung pembuatan gambar jadwal.");
+
+  const horizontalPadding = 48;
+  const columnWidths = [300, ...dates.map(() => 280)];
+  const tableWidth = columnWidths.reduce((total, width) => total + width, 0);
+  const canvasWidth = Math.max(1_000, tableWidth + horizontalPadding * 2);
+  const tableTop = 142;
+  const lineHeight = 24;
+  const cellPadding = 16;
+
+  canvas.width = canvasWidth;
+  context.font = "500 18px Arial, sans-serif";
+  const headerLines = ["Jenis relawan", ...dates].map((value, index) =>
+    wrapCanvasText(context, value, columnWidths[index] - cellPadding * 2),
+  );
+  const headerHeight = Math.max(58, Math.max(...headerLines.map((lines) => lines.length)) * lineHeight + cellPadding * 2);
+  const rowLayouts = rows.map((row) => {
+    const values = [row.volunteerType, ...row.volunteerNames];
+    const lines = values.map((value, index) =>
+      wrapCanvasText(context, value, columnWidths[index] - cellPadding * 2),
+    );
+    const height = Math.max(58, Math.max(...lines.map((item) => item.length)) * lineHeight + cellPadding * 2);
+    return { lines, height };
+  });
+
+  canvas.height = Math.max(
+    360,
+    tableTop + headerHeight + rowLayouts.reduce((total, row) => total + row.height, 0) + 48,
+  );
+
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = "#17364a";
+  context.font = "700 34px Arial, sans-serif";
+  context.fillText(eventName, horizontalPadding, 58, tableWidth);
+  context.fillStyle = "#60727e";
+  context.font = "500 18px Arial, sans-serif";
+  context.fillText(`Jadwal pelayanan • ${month}`, horizontalPadding, 94, tableWidth);
+
+  const drawCell = (
+    lines: string[],
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    options: { background: string; color: string; bold?: boolean },
+  ) => {
+    context.fillStyle = options.background;
+    context.fillRect(x, y, width, height);
+    context.strokeStyle = "#dce4e8";
+    context.lineWidth = 1;
+    context.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1);
+    context.fillStyle = options.color;
+    context.font = `${options.bold ? "700" : "500"} 18px Arial, sans-serif`;
+    lines.forEach((line, index) => {
+      context.fillText(line, x + cellPadding, y + cellPadding + 18 + index * lineHeight, width - cellPadding * 2);
+    });
+  };
+
+  let x = horizontalPadding;
+  headerLines.forEach((lines, index) => {
+    drawCell(lines, x, tableTop, columnWidths[index], headerHeight, {
+      background: "#17364a",
+      color: "#ffffff",
+      bold: true,
+    });
+    x += columnWidths[index];
+  });
+
+  let y = tableTop + headerHeight;
+  rowLayouts.forEach((row, rowIndex) => {
+    let cellX = horizontalPadding;
+    row.lines.forEach((lines, columnIndex) => {
+      drawCell(lines, cellX, y, columnWidths[columnIndex], row.height, {
+        background: rowIndex % 2 === 0 ? "#ffffff" : "#f7fafb",
+        color: columnIndex === 0 ? "#273844" : "#31596e",
+        bold: columnIndex === 0,
+      });
+      cellX += columnWidths[columnIndex];
+    });
+    y += row.height;
+  });
+
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("Gambar jadwal tidak dapat dibuat."));
+    }, "image/png");
+  });
 }
 
 function Logo({ large = false }: { large?: boolean }) {
@@ -595,6 +759,7 @@ function UpcomingItem({ data, occurrence }: { data: PlannerData; occurrence: Eve
 
 function Schedule({ data, canManage, onAssign, onChanged, showToast }: { data: PlannerData; canManage: boolean; onAssign: (target: { occurrence: EventOccurrence; section: ServiceSection }) => void; onChanged: (message: string) => Promise<void>; showToast: (message: string) => void }) {
   const [publishing, setPublishing] = useState(false);
+  const [exporting, setExporting] = useState<ScheduleExportFormat | null>(null);
   const initialEventId = data.events[0]?.id ?? "";
   const [eventFilter, setEventFilter] = useState(initialEventId);
   const [selectedMonth, setSelectedMonth] = useState(() => defaultScheduleMonth(data, initialEventId));
@@ -616,6 +781,20 @@ function Schedule({ data, canManage, onAssign, onChanged, showToast }: { data: P
   const sectionIds = new Set(occurrences.flatMap((occurrence) => requirementsFor(data, occurrence).map((requirement) => requirement.section_id)));
   const sections = data.sections.filter((section) => sectionIds.has(section.id));
   const published = data.scheduleVersions.some((version) => version.status === "published");
+  const exportDates = occurrences.map((occurrence) =>
+    formatDate(occurrence.starts_at, data.organization.timezone, { weekday: "long" }),
+  );
+  const exportRows: ScheduleExportRow[] = sections.map((section) => ({
+    volunteerType: section.name,
+    volunteerNames: occurrences.map((occurrence) => {
+      const requirement = requirementsFor(data, occurrence).find((item) => item.section_id === section.id);
+      if (!requirement) return "—";
+      const volunteerNames = assignmentsFor(data, occurrence.id, section.id)
+        .map((assignment) => data.volunteers.find((volunteer) => volunteer.id === assignment.volunteer_id)?.full_name)
+        .filter((name): name is string => Boolean(name));
+      return volunteerNames.join(", ") || "Belum ditugaskan";
+    }),
+  }));
 
   function selectEvent(eventGroupId: string) {
     setEventFilter(eventGroupId);
@@ -659,9 +838,61 @@ function Schedule({ data, canManage, onAssign, onChanged, showToast }: { data: P
     }
   }
 
+  async function handleExport(format: ScheduleExportFormat) {
+    if (!selectedEvent || !exportRows.length) return;
+    setExporting(format);
+    const monthLabel = formatMonthKey(selectedMonth);
+    const fileName = `jadwal-${safeExportFileName(selectedEvent.name)}-${selectedMonth}`;
+    try {
+      if (format === "csv") {
+        const csv = createScheduleCsv(selectedEvent.name, monthLabel, exportDates, exportRows);
+        downloadBlob(new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }), `${fileName}.csv`);
+      } else if (format === "png") {
+        downloadBlob(await createScheduleImage(selectedEvent.name, monthLabel, exportDates, exportRows), `${fileName}.png`);
+      } else {
+        const { default: writeExcelFile } = await import("write-excel-file/browser");
+        const headingStyle = {
+          fontWeight: "bold" as const,
+          backgroundColor: "#17364A",
+          textColor: "#FFFFFF",
+          alignVertical: "center" as const,
+          height: 30,
+        };
+        const columnCount = exportDates.length + 1;
+        const emptyCells = exportDates.map(() => null);
+        const sheetData: SheetData = [
+          [{ value: selectedEvent.name, columnSpan: columnCount, fontSize: 18, fontWeight: "bold", textColor: "#17364A", height: 34 }, ...emptyCells],
+          [{ value: `Jadwal pelayanan • ${monthLabel}`, columnSpan: columnCount, textColor: "#60727E", height: 24 }, ...emptyCells],
+          [null, ...emptyCells],
+          [
+            { value: "Jenis relawan", ...headingStyle },
+            ...exportDates.map((date) => ({ value: date, wrap: true, ...headingStyle })),
+          ],
+          ...exportRows.map((row) => [
+            { value: row.volunteerType, wrap: true, fontWeight: "bold" as const, alignVertical: "top" as const, height: 38, borderColor: "#DCE4E8", borderStyle: "thin" as const },
+            ...row.volunteerNames.map((names) => ({ value: names, wrap: true, alignVertical: "top" as const, textColor: "#31596E", borderColor: "#DCE4E8", borderStyle: "thin" as const })),
+          ]),
+        ];
+        const sheetName = selectedEvent.name.replace(/[\\/*?:[\]]/g, " ").trim().slice(0, 31) || "Jadwal";
+        await writeExcelFile(sheetData, {
+          sheet: sheetName,
+          columns: [{ width: 24 }, ...exportDates.map(() => ({ width: 32 }))],
+          stickyRowsCount: 4,
+          stickyColumnsCount: 1,
+          showGridLines: false,
+        }).toFile(`${fileName}.xlsx`);
+      }
+      showToast(`Jadwal ${format.toUpperCase()} berhasil diunduh.`);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Jadwal tidak dapat diekspor.");
+    } finally {
+      setExporting(null);
+    }
+  }
+
   return (
     <>
-      <PageHeader title="Jadwal pelayanan" description="Pilih satu kegiatan dan kelola penugasan satu bulan pada satu waktu." actions={<>{<button className="button button-secondary" type="button" onClick={() => { void navigator.clipboard?.writeText(window.location.href); showToast("Tautan jadwal disalin."); }}><Copy size={17} /> Salin tautan</button>}{canManage ? <button className="button button-primary" type="button" disabled={publishing || !occurrences.length} onClick={handlePublish}><Bell size={17} /> {publishing ? "Menerbitkan..." : published ? "Terbitkan ulang" : "Terbitkan jadwal"}</button> : null}</>} />
+      <PageHeader title="Jadwal pelayanan" description="Pilih satu kegiatan dan kelola penugasan satu bulan pada satu waktu." actions={<><details className="export-menu"><summary className="button button-secondary" aria-disabled={!exportRows.length || Boolean(exporting)}>{exporting ? <LoaderCircle className="spin" size={17} /> : <Download size={17} />} Ekspor</summary><div className="export-options" role="menu"><button type="button" role="menuitem" disabled={!exportRows.length || Boolean(exporting)} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void handleExport("xlsx"); }}><FileSpreadsheet size={18} /><span><strong>Excel</strong><small>.xlsx</small></span></button><button type="button" role="menuitem" disabled={!exportRows.length || Boolean(exporting)} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void handleExport("csv"); }}><FileText size={18} /><span><strong>CSV</strong><small>.csv</small></span></button><button type="button" role="menuitem" disabled={!exportRows.length || Boolean(exporting)} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void handleExport("png"); }}><ImageIcon size={18} /><span><strong>Gambar</strong><small>.png</small></span></button></div></details><button className="button button-secondary" type="button" onClick={() => { void navigator.clipboard?.writeText(window.location.href); showToast("Tautan jadwal disalin."); }}><Copy size={17} /> Salin tautan</button>{canManage ? <button className="button button-primary" type="button" disabled={publishing || !occurrences.length} onClick={handlePublish}><Bell size={17} /> {publishing ? "Menerbitkan..." : published ? "Terbitkan ulang" : "Terbitkan jadwal"}</button> : null}</>} />
       <div className="schedule-toolbar card">
         <div className="segmented-control" role="group" aria-label="Tampilan jadwal"><button className="active" type="button">Agenda</button></div>
         <label className="event-filter"><span className="sr-only">Pilih kegiatan</span><select value={eventFilter} onChange={(event) => selectEvent(event.target.value)} aria-label="Tampilkan jadwal kegiatan" disabled={!data.events.length}>{data.events.length ? data.events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>) : <option value="">Belum ada kegiatan</option>}</select></label>
