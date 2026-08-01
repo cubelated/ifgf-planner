@@ -1,6 +1,12 @@
 import type { User } from "@supabase/supabase-js";
 import type { Tables } from "./database.types";
+import {
+  generateOccurrenceDatesForMonth,
+  monthKeyInTimeZone,
+} from "./recurrence";
 import { getSupabaseBrowserClient } from "./supabase";
+
+export { generateOccurrenceDates, monthKeyAfter, monthKeyInTimeZone } from "./recurrence";
 
 export type Profile = Tables<"profiles">;
 export type Organization = Tables<"organizations">;
@@ -59,7 +65,7 @@ export async function loadPlannerData(user: User): Promise<PlannerData> {
   const rangeStart = new Date();
   rangeStart.setDate(rangeStart.getDate() - 31);
   const rangeEnd = new Date();
-  rangeEnd.setDate(rangeEnd.getDate() + 240);
+  rangeEnd.setDate(rangeEnd.getDate() + 550);
 
   const [profileResult, organizationResult, sectionsResult, volunteersResult, eventsResult, occurrencesResult, absencesResult, assignmentsResult, versionsResult] =
     await Promise.all([
@@ -266,63 +272,6 @@ export type SaveEventGroupInput = {
 
 export type CreateEventGroupInput = Omit<SaveEventGroupInput, "id" | "existingEvent">;
 
-function calendarDateInTimeZone(timeZone: string) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const value = (type: Intl.DateTimeFormatPartTypes) =>
-    Number(parts.find((part) => part.type === type)?.value);
-  return new Date(Date.UTC(value("year"), value("month") - 1, value("day")));
-}
-
-function dateKey(date: Date) {
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(
-    date.getUTCDate(),
-  ).padStart(2, "0")}`;
-}
-
-function offsetForTimeZone(timeZone: string, date: Date) {
-  const name = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    timeZoneName: "longOffset",
-  })
-    .formatToParts(date)
-    .find((part) => part.type === "timeZoneName")?.value;
-  if (!name || name === "GMT") return "+00:00";
-  const match = name.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/);
-  if (!match) return "+00:00";
-  return `${match[1]}${match[2].padStart(2, "0")}:${match[3] ?? "00"}`;
-}
-
-export function generateOccurrenceDates(input: {
-  weekday: number;
-  startTime: string;
-  durationMinutes: number;
-  weekOccurrences: number[];
-  timezone: string;
-  count?: number;
-}) {
-  const results: Array<{ startsAt: string; endsAt: string }> = [];
-  const cursor = calendarDateInTimeZone(input.timezone);
-  const limit = input.count ?? 20;
-
-  for (let scanned = 0; scanned < 500 && results.length < limit; scanned += 1) {
-    const weekOccurrence = Math.floor((cursor.getUTCDate() - 1) / 7) + 1;
-    if (cursor.getUTCDay() === input.weekday && input.weekOccurrences.includes(weekOccurrence)) {
-      const offset = offsetForTimeZone(input.timezone, cursor);
-      const startsAt = new Date(`${dateKey(cursor)}T${input.startTime}:00${offset}`);
-      const endsAt = new Date(startsAt.getTime() + input.durationMinutes * 60_000);
-      results.push({ startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString() });
-    }
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-  }
-
-  return results;
-}
-
 function validateEventGroupInput(input: SaveEventGroupInput) {
   const sectionIds = input.requirements.map((requirement) => requirement.sectionId);
   if (new Set(sectionIds).size !== sectionIds.length) {
@@ -377,22 +326,26 @@ export async function createEventGroup(input: CreateEventGroupInput) {
       if (requirementsError) throw requirementsError;
     }
 
-    const generated = generateOccurrenceDates({
+    const generated = generateOccurrenceDatesForMonth({
       weekday: input.weekday,
       startTime: input.startTime,
       durationMinutes: input.durationMinutes,
       weekOccurrences: input.weekOccurrences,
       timezone: input.timezone,
+      month: monthKeyInTimeZone(new Date(), input.timezone),
+      notBefore: new Date(),
     });
-    const { error: occurrencesError } = await supabase.from("event_occurrences").insert(
-      generated.map((occurrence) => ({
-        organization_id: input.organizationId,
-        event_group_id: eventGroup.id,
-        starts_at: occurrence.startsAt,
-        ends_at: occurrence.endsAt,
-      })),
-    );
-    if (occurrencesError) throw occurrencesError;
+    if (generated.length) {
+      const { error: occurrencesError } = await supabase.from("event_occurrences").insert(
+        generated.map((occurrence) => ({
+          organization_id: input.organizationId,
+          event_group_id: eventGroup.id,
+          starts_at: occurrence.startsAt,
+          ends_at: occurrence.endsAt,
+        })),
+      );
+      if (occurrencesError) throw occurrencesError;
+    }
   } catch (relatedError) {
     await supabase.from("event_groups").delete().eq("id", eventGroup.id);
     fail("Tanggal dan kebutuhan kegiatan tidak dapat dibuat.", relatedError);
@@ -488,6 +441,14 @@ export async function updateEventGroup(input: SaveEventGroupInput & { id: string
 
   if (scheduleChanged) {
     const now = new Date().toISOString();
+    const generatedMonths = Array.from(new Set(
+      occurrences
+        .filter((occurrence) => new Date(occurrence.starts_at) >= new Date(now))
+        .map((occurrence) => monthKeyInTimeZone(occurrence.starts_at, input.timezone)),
+    ));
+    if (!generatedMonths.length) {
+      generatedMonths.push(monthKeyInTimeZone(new Date(), input.timezone));
+    }
     const { error: deleteError } = await supabase
       .from("event_occurrences")
       .delete()
@@ -495,22 +456,28 @@ export async function updateEventGroup(input: SaveEventGroupInput & { id: string
       .gte("starts_at", now);
     if (deleteError) fail("Tanggal lama kegiatan tidak dapat diperbarui.", deleteError);
 
-    const generated = generateOccurrenceDates({
-      weekday: input.weekday,
-      startTime: input.startTime,
-      durationMinutes: input.durationMinutes,
-      weekOccurrences: input.weekOccurrences,
-      timezone: input.timezone,
-    });
-    const { error: occurrenceError } = await supabase.from("event_occurrences").insert(
-      generated.map((occurrence) => ({
-        organization_id: input.organizationId,
-        event_group_id: input.id,
-        starts_at: occurrence.startsAt,
-        ends_at: occurrence.endsAt,
-      })),
+    const generated = generatedMonths.flatMap((month) =>
+      generateOccurrenceDatesForMonth({
+        weekday: input.weekday,
+        startTime: input.startTime,
+        durationMinutes: input.durationMinutes,
+        weekOccurrences: input.weekOccurrences,
+        timezone: input.timezone,
+        month,
+        notBefore: new Date(now),
+      }),
     );
-    if (occurrenceError) fail("Tanggal baru kegiatan tidak dapat dibuat.", occurrenceError);
+    if (generated.length) {
+      const { error: occurrenceError } = await supabase.from("event_occurrences").insert(
+        generated.map((occurrence) => ({
+          organization_id: input.organizationId,
+          event_group_id: input.id,
+          starts_at: occurrence.startsAt,
+          ends_at: occurrence.endsAt,
+        })),
+      );
+      if (occurrenceError) fail("Tanggal baru kegiatan tidak dapat dibuat.", occurrenceError);
+    }
   }
 }
 
@@ -519,6 +486,94 @@ export async function saveEventGroup(input: SaveEventGroupInput) {
     return updateEventGroup({ ...input, id: input.id, existingEvent: input.existingEvent });
   }
   return createEventGroup(input);
+}
+
+export async function generateEventMonth(input: {
+  organizationId: string;
+  event: EventGroup;
+  timezone: string;
+  month: string;
+}) {
+  const supabase = getSupabaseBrowserClient();
+  const currentMonth = monthKeyInTimeZone(new Date(), input.timezone);
+  const generated = generateOccurrenceDatesForMonth({
+    weekday: input.event.weekday,
+    startTime: input.event.start_time.slice(0, 5),
+    durationMinutes: input.event.duration_minutes,
+    weekOccurrences: input.event.week_occurrences,
+    timezone: input.timezone,
+    month: input.month,
+    notBefore: input.month === currentMonth ? new Date() : undefined,
+  });
+
+  if (!generated.length) return 0;
+
+  const { error } = await supabase.from("event_occurrences").upsert(
+    generated.map((occurrence) => ({
+      organization_id: input.organizationId,
+      event_group_id: input.event.id,
+      starts_at: occurrence.startsAt,
+      ends_at: occurrence.endsAt,
+    })),
+    { onConflict: "event_group_id,starts_at", ignoreDuplicates: true },
+  );
+  if (error) fail("Tanggal kegiatan untuk bulan berikutnya tidak dapat dibuat.", error);
+  return generated.length;
+}
+
+export type EventDeletionImpact = {
+  occurrences: number;
+  assignments: number;
+  unavailability: number;
+};
+
+export async function getEventDeletionImpact(eventGroupId: string): Promise<EventDeletionImpact> {
+  const supabase = getSupabaseBrowserClient();
+  const { data: occurrences, error: occurrenceError } = await supabase
+    .from("event_occurrences")
+    .select("id")
+    .eq("event_group_id", eventGroupId);
+  if (occurrenceError) fail("Dampak penghapusan kegiatan tidak dapat diperiksa.", occurrenceError);
+
+  const occurrenceIds = (occurrences ?? []).map((occurrence) => occurrence.id);
+  if (!occurrenceIds.length) {
+    return { occurrences: 0, assignments: 0, unavailability: 0 };
+  }
+
+  const [assignmentsResult, unavailabilityResult] = await Promise.all([
+    supabase
+      .from("assignments")
+      .select("id", { count: "exact", head: true })
+      .in("occurrence_id", occurrenceIds),
+    supabase
+      .from("unavailability")
+      .select("id", { count: "exact", head: true })
+      .in("occurrence_id", occurrenceIds),
+  ]);
+  if (assignmentsResult.error || unavailabilityResult.error) {
+    fail(
+      "Dampak penugasan dan ketidakhadiran tidak dapat diperiksa.",
+      assignmentsResult.error ?? unavailabilityResult.error,
+    );
+  }
+
+  return {
+    occurrences: occurrenceIds.length,
+    assignments: assignmentsResult.count ?? 0,
+    unavailability: unavailabilityResult.count ?? 0,
+  };
+}
+
+export async function deleteEventGroup(eventGroupId: string) {
+  const supabase = getSupabaseBrowserClient();
+  const { data, error } = await supabase
+    .from("event_groups")
+    .delete()
+    .eq("id", eventGroupId)
+    .select("id")
+    .maybeSingle();
+  if (error) fail("Kegiatan tidak dapat dihapus.", error);
+  if (!data) throw new Error("Kegiatan tidak ditemukan atau Anda tidak memiliki izin untuk menghapusnya.");
 }
 
 export async function submitUnavailability(input: {

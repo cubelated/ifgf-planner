@@ -65,8 +65,13 @@ import { translate, type MessageKey } from "@/lib/i18n";
 import {
   assignVolunteer,
   createServiceSection,
+  deleteEventGroup,
+  generateEventMonth,
   generateOccurrenceDates,
+  getEventDeletionImpact,
   loadPlannerData,
+  monthKeyAfter,
+  monthKeyInTimeZone,
   publishSchedule,
   reorderServiceSections,
   removeAssignment,
@@ -74,6 +79,7 @@ import {
   saveVolunteer,
   submitUnavailability,
   type EventGroup,
+  type EventDeletionImpact,
   type EventOccurrence,
   type PlannerData,
   type ServiceSection,
@@ -159,6 +165,25 @@ function formatTime(value: string, timezone: string) {
   }).format(new Date(value));
 }
 
+function formatMonthKey(monthKey: string) {
+  const [year, month] = monthKey.split("-").map(Number);
+  return new Intl.DateTimeFormat("id-ID", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(year, month - 1, 1)));
+}
+
+function defaultScheduleMonth(data: PlannerData, eventGroupId: string) {
+  const currentMonth = monthKeyInTimeZone(new Date(), data.organization.timezone);
+  const eventMonths = Array.from(new Set(
+    data.occurrences
+      .filter((occurrence) => occurrence.event_group_id === eventGroupId)
+      .map((occurrence) => monthKeyInTimeZone(occurrence.starts_at, data.organization.timezone)),
+  )).sort();
+  return eventMonths.find((month) => month >= currentMonth) ?? eventMonths.at(-1) ?? currentMonth;
+}
+
 function recurrenceLabel(event: EventGroup) {
   const pattern = PATTERN_OPTIONS.find((option) => option.value === event.recurrence_pattern);
   return `${pattern?.label ?? "Pola khusus"} • ${event.start_time.slice(0, 5)}`;
@@ -207,6 +232,7 @@ export default function PlannerApp() {
   const [view, setView] = useState<View>("overview");
   const [menuOpen, setMenuOpen] = useState(false);
   const [eventDialog, setEventDialog] = useState<EventGroup | "new" | null>(null);
+  const [eventDeleteTarget, setEventDeleteTarget] = useState<EventGroup | null>(null);
   const [volunteerDialog, setVolunteerDialog] = useState<Volunteer | "new" | null>(null);
   const [assignmentTarget, setAssignmentTarget] = useState<{
     occurrence: EventOccurrence;
@@ -379,7 +405,7 @@ export default function PlannerApp() {
         <main id="main-content" className="content">
           {view === "overview" ? <Overview data={data} canManage={canManage} onNavigate={setView} onAddEvent={() => setEventDialog("new")} /> : null}
           {view === "schedule" ? <Schedule data={data} canManage={canManage} onAssign={setAssignmentTarget} onChanged={changed} showToast={showToast} /> : null}
-          {view === "events" && canManage ? <Events data={data} onAdd={() => setEventDialog("new")} onEdit={setEventDialog} /> : null}
+          {view === "events" && canManage ? <Events data={data} onAdd={() => setEventDialog("new")} onEdit={setEventDialog} onDelete={setEventDeleteTarget} /> : null}
           {view === "volunteers" && canManage ? <Volunteers data={data} onAdd={() => setVolunteerDialog("new")} onEdit={setVolunteerDialog} /> : null}
           {view === "unavailability" ? <Unavailability data={data} onChanged={changed} showToast={showToast} /> : null}
           {view === "notifications" && canManage ? <Notifications showToast={showToast} /> : null}
@@ -387,7 +413,8 @@ export default function PlannerApp() {
         </main>
       </div>
 
-      {eventDialog ? <EventDialog data={data} eventGroup={eventDialog === "new" ? null : eventDialog} onClose={() => setEventDialog(null)} onSaved={async () => { const editing = eventDialog !== "new"; setEventDialog(null); setView("events"); await changed(editing ? "Kegiatan berhasil diperbarui." : "Kegiatan dan tanggal berikutnya berhasil dibuat."); }} /> : null}
+      {eventDialog ? <EventDialog data={data} eventGroup={eventDialog === "new" ? null : eventDialog} onClose={() => setEventDialog(null)} onSaved={async () => { const editing = eventDialog !== "new"; setEventDialog(null); setView("events"); await changed(editing ? "Kegiatan berhasil diperbarui." : "Kegiatan dan tanggal bulan ini berhasil dibuat."); }} /> : null}
+      {eventDeleteTarget ? <EventDeleteDialog eventGroup={eventDeleteTarget} onClose={() => setEventDeleteTarget(null)} onDeleted={async () => { setEventDeleteTarget(null); await changed("Kegiatan dan seluruh data terkait berhasil dihapus."); }} /> : null}
       {volunteerDialog ? <VolunteerDialog data={data} volunteer={volunteerDialog === "new" ? null : volunteerDialog} onClose={() => setVolunteerDialog(null)} onSaved={async () => { setVolunteerDialog(null); await changed(volunteerDialog === "new" ? "Relawan berhasil ditambahkan." : "Data relawan berhasil diperbarui."); }} /> : null}
       {assignmentTarget ? <AssignmentDialog data={data} target={assignmentTarget} onClose={() => setAssignmentTarget(null)} onChanged={async (message) => { await changed(message); }} /> : null}
 
@@ -540,20 +567,37 @@ function UpcomingItem({ data, occurrence }: { data: PlannerData; occurrence: Eve
 
 function Schedule({ data, canManage, onAssign, onChanged, showToast }: { data: PlannerData; canManage: boolean; onAssign: (target: { occurrence: EventOccurrence; section: ServiceSection }) => void; onChanged: (message: string) => Promise<void>; showToast: (message: string) => void }) {
   const [publishing, setPublishing] = useState(false);
-  const [eventFilter, setEventFilter] = useState("all");
-  const allUpcoming = data.occurrences.filter((occurrence) => new Date(occurrence.starts_at) >= new Date());
-  const eventOptions = data.events.filter((event) => allUpcoming.some((occurrence) => occurrence.event_group_id === event.id));
-  const upcoming = allUpcoming
-    .filter((occurrence) => eventFilter === "all" || occurrence.event_group_id === eventFilter)
-    .slice(0, eventFilter === "all" ? 6 : 8);
-  const sectionIds = new Set(upcoming.flatMap((occurrence) => requirementsFor(data, occurrence).map((requirement) => requirement.section_id)));
+  const initialEventId = data.events[0]?.id ?? "";
+  const [eventFilter, setEventFilter] = useState(initialEventId);
+  const [selectedMonth, setSelectedMonth] = useState(() => defaultScheduleMonth(data, initialEventId));
+  const [generating, setGenerating] = useState(false);
+  const selectedEvent = data.events.find((event) => event.id === eventFilter) ?? null;
+  const eventOccurrences = data.occurrences.filter(
+    (occurrence) => occurrence.event_group_id === eventFilter,
+  );
+  const availableMonths = Array.from(new Set([
+    ...eventOccurrences.map((occurrence) =>
+      monthKeyInTimeZone(occurrence.starts_at, data.organization.timezone),
+    ),
+    selectedMonth,
+  ])).sort();
+  const occurrences = eventOccurrences.filter(
+    (occurrence) =>
+      monthKeyInTimeZone(occurrence.starts_at, data.organization.timezone) === selectedMonth,
+  );
+  const sectionIds = new Set(occurrences.flatMap((occurrence) => requirementsFor(data, occurrence).map((requirement) => requirement.section_id)));
   const sections = data.sections.filter((section) => sectionIds.has(section.id));
   const published = data.scheduleVersions.some((version) => version.status === "published");
+
+  function selectEvent(eventGroupId: string) {
+    setEventFilter(eventGroupId);
+    setSelectedMonth(defaultScheduleMonth(data, eventGroupId));
+  }
 
   async function handlePublish() {
     setPublishing(true);
     try {
-      await publishSchedule({ organizationId: data.organization.id, userId: data.user.id, occurrences: upcoming });
+      await publishSchedule({ organizationId: data.organization.id, userId: data.user.id, occurrences });
       await onChanged("Jadwal berhasil diterbitkan.");
     } catch (error) {
       showToast(error instanceof Error ? error.message : "Jadwal tidak dapat diterbitkan.");
@@ -562,21 +606,48 @@ function Schedule({ data, canManage, onAssign, onChanged, showToast }: { data: P
     }
   }
 
+  async function handleAddMonth() {
+    if (!selectedEvent) return;
+    const latestMonth = availableMonths.at(-1) ?? selectedMonth;
+    const nextMonth = monthKeyAfter(latestMonth);
+    setGenerating(true);
+    try {
+      const generatedCount = await generateEventMonth({
+        organizationId: data.organization.id,
+        event: selectedEvent,
+        timezone: data.organization.timezone,
+        month: nextMonth,
+      });
+      setSelectedMonth(nextMonth);
+      await onChanged(
+        generatedCount
+          ? `${generatedCount} tanggal ${formatMonthKey(nextMonth)} berhasil dibuat.`
+          : `${formatMonthKey(nextMonth)} tidak memiliki tanggal yang sesuai dengan pola kegiatan.`,
+      );
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Bulan jadwal berikutnya tidak dapat dibuat.");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
   return (
     <>
-      <PageHeader title="Jadwal pelayanan" description="Isi posisi berdasarkan kualifikasi dan ketersediaan relawan." actions={<>{<button className="button button-secondary" type="button" onClick={() => { void navigator.clipboard?.writeText(window.location.href); showToast("Tautan jadwal disalin."); }}><Copy size={17} /> Salin tautan</button>}{canManage ? <button className="button button-primary" type="button" disabled={publishing || !upcoming.length} onClick={handlePublish}><Bell size={17} /> {publishing ? "Menerbitkan..." : published ? "Terbitkan ulang" : "Terbitkan jadwal"}</button> : null}</>} />
+      <PageHeader title="Jadwal pelayanan" description="Pilih satu kegiatan dan kelola penugasan satu bulan pada satu waktu." actions={<>{<button className="button button-secondary" type="button" onClick={() => { void navigator.clipboard?.writeText(window.location.href); showToast("Tautan jadwal disalin."); }}><Copy size={17} /> Salin tautan</button>}{canManage ? <button className="button button-primary" type="button" disabled={publishing || !occurrences.length} onClick={handlePublish}><Bell size={17} /> {publishing ? "Menerbitkan..." : published ? "Terbitkan ulang" : "Terbitkan jadwal"}</button> : null}</>} />
       <div className="schedule-toolbar card">
         <div className="segmented-control" role="group" aria-label="Tampilan jadwal"><button className="active" type="button">Agenda</button></div>
-        <label className="event-filter"><span className="sr-only">Filter berdasarkan kegiatan</span><select value={eventFilter} onChange={(event) => setEventFilter(event.target.value)} aria-label="Tampilkan jadwal kegiatan"><option value="all">Semua kegiatan</option>{eventOptions.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}</select></label>
-        <span className="schedule-draft"><span /> {eventFilter === "all" ? "Semua kegiatan" : data.events.find((event) => event.id === eventFilter)?.name}</span>
-        <button className="button button-secondary regenerate" type="button" onClick={() => window.location.reload()}><RefreshCw size={16} /> Muat ulang</button>
+        <label className="event-filter"><span className="sr-only">Pilih kegiatan</span><select value={eventFilter} onChange={(event) => selectEvent(event.target.value)} aria-label="Tampilkan jadwal kegiatan" disabled={!data.events.length}>{data.events.length ? data.events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>) : <option value="">Belum ada kegiatan</option>}</select></label>
+        <label className="month-filter"><span className="sr-only">Pilih bulan</span><select value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)} aria-label="Tampilkan bulan jadwal" disabled={!selectedEvent}>{availableMonths.map((month) => <option key={month} value={month}>{formatMonthKey(month)}</option>)}</select></label>
+        <span className="schedule-draft"><span /> {selectedEvent?.name ?? "Pilih kegiatan"}</span>
+        {canManage ? <button className="button button-secondary regenerate" type="button" onClick={handleAddMonth} disabled={!selectedEvent || generating}><Plus size={16} /> {generating ? "Membuat..." : `Tambah ${formatMonthKey(monthKeyAfter(availableMonths.at(-1) ?? selectedMonth))}`}</button> : null}
       </div>
       <section className="card schedule-board" aria-label="Papan jadwal pelayanan">
-        {!upcoming.length ? <EmptyState icon={CalendarDays} title="Belum ada tanggal kegiatan" description="Tanggal mendatang akan muncul setelah koordinator menambahkan kegiatan." /> : !sections.length ? <EmptyState icon={Users} title="Belum ada kebutuhan tim" description="Tambahkan bagian pelayanan, lalu buat kegiatan dengan kebutuhan relawan." /> : <>
-          <div className="schedule-table-wrap"><table className="schedule-table"><thead><tr><th>Bagian pelayanan</th>{upcoming.map((occurrence) => <th key={occurrence.id}><strong>{formatShortDate(occurrence.starts_at, data.organization.timezone)}</strong><span>{data.events.find((event) => event.id === occurrence.event_group_id)?.name}</span></th>)}</tr></thead><tbody>{sections.map((section) => <tr key={section.id}><th><strong>{section.name}</strong></th>{upcoming.map((occurrence) => <ScheduleCell key={occurrence.id} data={data} occurrence={occurrence} section={section} canManage={canManage} onOpen={() => onAssign({ occurrence, section })} />)}</tr>)}</tbody></table></div>
-          <div className="mobile-agenda">{upcoming.map((occurrence) => { const coverage = coverageFor(data, occurrence); const requiredSectionIds = new Set(requirementsFor(data, occurrence).map((requirement) => requirement.section_id)); const occurrenceSections = data.sections.filter((section) => requiredSectionIds.has(section.id)); return <article key={occurrence.id}><header><div><strong>{formatShortDate(occurrence.starts_at, data.organization.timezone)}</strong><span>{data.events.find((event) => event.id === occurrence.event_group_id)?.name}</span></div><StatusPill tone={coverage.missing ? "attention" : "ready"}>{coverage.missing ? `${coverage.missing} kosong` : "Siap"}</StatusPill></header>{occurrenceSections.map((section) => <div className="mobile-assignment" key={section.id}><span>{section.name}</span><ScheduleCell mobile data={data} occurrence={occurrence} section={section} canManage={canManage} onOpen={() => onAssign({ occurrence, section })} /></div>)}</article>; })}</div>
+        {!selectedEvent ? <EmptyState icon={CalendarDays} title="Belum ada kegiatan" description="Tambahkan kegiatan sebelum membuat jadwal bulanan." /> : !occurrences.length ? <EmptyState icon={CalendarDays} title={`Belum ada tanggal pada ${formatMonthKey(selectedMonth)}`} description="Gunakan tombol Tambah bulan berikutnya untuk membuat tanggal dari pola kegiatan ini." /> : !sections.length ? <EmptyState icon={Users} title="Belum ada kebutuhan tim" description="Tambahkan bagian pelayanan, lalu atur kebutuhan relawan pada kegiatan ini." /> : <>
+          <div className="schedule-table-wrap"><table className="schedule-table"><thead><tr><th>Bagian pelayanan</th>{occurrences.map((occurrence) => <th key={occurrence.id}><strong>{formatShortDate(occurrence.starts_at, data.organization.timezone)}</strong><span>{selectedEvent.name}</span></th>)}</tr></thead><tbody>{sections.map((section) => <tr key={section.id}><th><strong>{section.name}</strong></th>{occurrences.map((occurrence) => <ScheduleCell key={occurrence.id} data={data} occurrence={occurrence} section={section} canManage={canManage} onOpen={() => onAssign({ occurrence, section })} />)}</tr>)}</tbody></table></div>
+          <div className="mobile-agenda">{occurrences.map((occurrence) => { const coverage = coverageFor(data, occurrence); const requiredSectionIds = new Set(requirementsFor(data, occurrence).map((requirement) => requirement.section_id)); const occurrenceSections = data.sections.filter((section) => requiredSectionIds.has(section.id)); return <article key={occurrence.id}><header><div><strong>{formatShortDate(occurrence.starts_at, data.organization.timezone)}</strong><span>{selectedEvent.name}</span></div><StatusPill tone={coverage.missing ? "attention" : "ready"}>{coverage.missing ? `${coverage.missing} kosong` : "Siap"}</StatusPill></header>{occurrenceSections.map((section) => <div className="mobile-assignment" key={section.id}><span>{section.name}</span><ScheduleCell mobile data={data} occurrence={occurrence} section={section} canManage={canManage} onOpen={() => onAssign({ occurrence, section })} /></div>)}</article>; })}</div>
         </>}
       </section>
+      <section className="card recurrence-note"><span><CalendarDays size={22} /></span><div><h2>Cara tanggal berulang dibuat</h2><p>Setiap kegiatan menyimpan hari dan minggu dalam bulan sebagai pola. IFGF Planner hanya membuat tanggal bulan awal saat kegiatan disimpan; bulan berikutnya dibuat saat Anda menekan tombol Tambah, lalu langsung dibuka untuk dijadwalkan.</p></div></section>
     </>
   );
 }
@@ -588,8 +659,38 @@ function ScheduleCell({ data, occurrence, section, canManage, onOpen, mobile = f
   return mobile ? <div>{content}</div> : <td>{content}</td>;
 }
 
-function Events({ data, onAdd, onEdit }: { data: PlannerData; onAdd: () => void; onEdit: (event: EventGroup) => void }) {
-  return <><PageHeader title="Kegiatan" description="Atur hari, pola mingguan, dan kebutuhan pelayanan setiap kegiatan." actions={<button className="button button-primary" type="button" onClick={onAdd}><Plus size={18} /> Tambah kegiatan</button>} /><section className="event-grid">{data.events.map((event, index) => { const next = data.occurrences.find((occurrence) => occurrence.event_group_id === event.id && new Date(occurrence.starts_at) >= new Date()); const requirements = data.requirements.filter((requirement) => requirement.event_group_id === event.id); const neededVolunteers = requirements.reduce((total, requirement) => total + requirement.needed_count, 0); return <article className="card event-card" key={event.id}><div className={`event-mark ${["blue", "violet", "teal", "amber"][index % 4]}`}><CalendarCheck size={22} /></div><div className="event-title"><div><h2>{event.name}</h2><p>{recurrenceLabel(event)}</p></div><button className="icon-button" type="button" aria-label={`Edit ${event.name}`} title="Edit kegiatan" onClick={() => onEdit(event)}><Pencil size={17} /></button></div><div className="event-meta"><span>Berikutnya</span><strong>{next ? formatDate(next.starts_at, data.organization.timezone) : "Belum ada tanggal"}</strong></div><div className="event-footer"><span><Users size={16} /> {requirements.length} jenis • {neededVolunteers} relawan</span><button className="text-button" type="button" onClick={() => onEdit(event)}>Edit kegiatan <ChevronRight size={15} /></button></div></article>; })}<button className="add-event-card" type="button" onClick={onAdd}><span><Plus size={22} /></span><strong>Tambah kegiatan baru</strong><small>Atur jadwal berulang dan kebutuhan tim</small></button></section>{!data.events.length ? <section className="card recurrence-note"><span><CalendarDays size={22} /></span><div><h2>Belum ada kegiatan</h2><p>Buat kegiatan pertama; tanggal pelayanan berikutnya akan dihasilkan dan disimpan otomatis.</p></div></section> : null}</>;
+function Events({ data, onAdd, onEdit, onDelete }: { data: PlannerData; onAdd: () => void; onEdit: (event: EventGroup) => void; onDelete: (event: EventGroup) => void }) {
+  return <><PageHeader title="Kegiatan" description="Atur hari, pola mingguan, dan kebutuhan pelayanan setiap kegiatan." actions={<button className="button button-primary" type="button" onClick={onAdd}><Plus size={18} /> Tambah kegiatan</button>} /><section className="event-grid">{data.events.map((event, index) => { const next = data.occurrences.find((occurrence) => occurrence.event_group_id === event.id && new Date(occurrence.starts_at) >= new Date()); const requirements = data.requirements.filter((requirement) => requirement.event_group_id === event.id); const neededVolunteers = requirements.reduce((total, requirement) => total + requirement.needed_count, 0); return <article className="card event-card" key={event.id}><div className={`event-mark ${["blue", "violet", "teal", "amber"][index % 4]}`}><CalendarCheck size={22} /></div><div className="event-title"><div><h2>{event.name}</h2><p>{recurrenceLabel(event)}</p></div><div className="event-card-actions"><button className="icon-button" type="button" aria-label={`Edit ${event.name}`} title="Edit kegiatan" onClick={() => onEdit(event)}><Pencil size={17} /></button><button className="icon-button danger" type="button" aria-label={`Hapus ${event.name}`} title="Hapus kegiatan" onClick={() => onDelete(event)}><Trash2 size={17} /></button></div></div><div className="event-meta"><span>Berikutnya</span><strong>{next ? formatDate(next.starts_at, data.organization.timezone) : "Belum ada tanggal"}</strong></div><div className="event-footer"><span><Users size={16} /> {requirements.length} jenis • {neededVolunteers} relawan</span><button className="text-button" type="button" onClick={() => onEdit(event)}>Edit kegiatan <ChevronRight size={15} /></button></div></article>; })}<button className="add-event-card" type="button" onClick={onAdd}><span><Plus size={22} /></span><strong>Tambah kegiatan baru</strong><small>Atur jadwal berulang dan kebutuhan tim</small></button></section>{!data.events.length ? <section className="card recurrence-note"><span><CalendarDays size={22} /></span><div><h2>Belum ada kegiatan</h2><p>Buat kegiatan pertama; tanggal pelayanan bulan ini akan dihasilkan dan disimpan otomatis.</p></div></section> : null}</>;
+}
+
+function EventDeleteDialog({ eventGroup, onClose, onDeleted }: { eventGroup: EventGroup; onClose: () => void; onDeleted: () => Promise<void> }) {
+  const [impact, setImpact] = useState<EventDeletionImpact | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    getEventDeletionImpact(eventGroup.id)
+      .then((result) => { if (active) setImpact(result); })
+      .catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : "Dampak penghapusan tidak dapat diperiksa."); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [eventGroup.id]);
+
+  async function confirmDelete() {
+    setDeleting(true);
+    setError("");
+    try {
+      await deleteEventGroup(eventGroup.id);
+      await onDeleted();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Kegiatan tidak dapat dihapus.");
+      setDeleting(false);
+    }
+  }
+
+  return <Modal title={`Hapus ${eventGroup.name}?`} eyebrow="TINDAKAN PERMANEN" description="Penghapusan tidak dapat dibatalkan." onClose={() => !deleting && onClose()}><div className="delete-confirmation">{loading ? <div className="delete-loading"><LoaderCircle className="spin" size={22} /><span>Memeriksa data yang akan terhapus...</span></div> : <><div className="delete-warning"><AlertCircle size={21} /><div><strong>Semua data kegiatan ini akan dihapus permanen.</strong><p>Periksa dampaknya sebelum melanjutkan.</p></div></div>{impact ? <dl className="delete-impact"><div><dt>Tanggal kegiatan</dt><dd>{impact.occurrences}</dd></div><div><dt>Penugasan relawan</dt><dd>{impact.assignments}</dd></div><div><dt>Laporan ketidakhadiran</dt><dd>{impact.unavailability}</dd></div></dl> : null}</>}{error ? <p className="form-error" role="alert">{error}</p> : null}<footer><button className="button button-secondary" type="button" onClick={onClose} disabled={deleting}>Batal</button><button className="button button-danger" type="button" onClick={confirmDelete} disabled={loading || !impact || deleting}><Trash2 size={17} /> {deleting ? "Menghapus..." : "Hapus permanen"}</button></footer></div></Modal>;
 }
 
 function Volunteers({ data, onAdd, onEdit }: { data: PlannerData; onAdd: () => void; onEdit: (volunteer: Volunteer) => void }) {
@@ -783,6 +884,7 @@ function EventDialog({ data, eventGroup, onClose, onSaved }: { data: PlannerData
     try { await saveEventGroup({ id: eventGroup?.id, existingEvent: eventGroup ?? undefined, organizationId: data.organization.id, userId: data.user.id, timezone: data.organization.timezone, name, weekday, startTime, durationMinutes: duration, recurrencePattern: pattern, weekOccurrences: weeks, requirements }); await onSaved(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Kegiatan tidak dapat disimpan."); setSaving(false); }
   }
+
   return <Modal title={editing ? "Edit kegiatan" : "Atur jadwal berulang"} eyebrow={editing ? "PERBARUI KEGIATAN" : "KEGIATAN BARU"} description={editing ? "Perubahan pola akan diterapkan pada tanggal mendatang yang belum memiliki penugasan atau laporan ketidakhadiran." : "Setiap kegiatan dapat memiliki jenis pelayanan dan jumlah relawan yang berbeda."} onClose={onClose}><form onSubmit={submit}><label>Nama kegiatan<input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="Contoh: Sunday Service" required /></label><div className="form-row"><label>Hari<select value={weekday} onChange={(event) => setWeekday(Number(event.target.value))}>{WEEKDAYS.map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}</select></label><label>Waktu<input type="time" value={startTime} onChange={(event) => setStartTime(event.target.value)} required /></label></div><label>Durasi<select value={duration} onChange={(event) => setDuration(Number(event.target.value))}><option value={60}>1 jam</option><option value={90}>1,5 jam</option><option value={120}>2 jam</option><option value={180}>3 jam</option></select></label><label>Pola pengulangan<select value={pattern} onChange={(event) => setPattern(event.target.value as typeof pattern)}>{PATTERN_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>{pattern === "custom" ? <fieldset className="week-options"><legend>Minggu dalam bulan</legend>{[1, 2, 3, 4, 5].map((week) => <label key={week}><input type="checkbox" checked={customWeeks.includes(week)} onChange={() => setCustomWeeks((current) => current.includes(week) ? current.filter((item) => item !== week) : [...current, week].sort())} /> Ke-{week}</label>)}</fieldset> : null}<fieldset className="requirement-options"><legend>Kebutuhan relawan</legend><div className="requirement-heading"><div><strong>Jenis pelayanan</strong><span>Atur khusus untuk kegiatan ini. Minimum satu relawan per jenis.</span></div><button className="button button-secondary button-compact" type="button" onClick={addRequirement} disabled={!data.sections.length || requirements.length >= data.sections.length}><Plus size={16} /> Tambah jenis</button></div>{requirements.length ? <div className="requirement-list">{requirements.map((requirement, index) => { const section = data.sections.find((item) => item.id === requirement.sectionId); return <div className="requirement-row" key={requirement.sectionId}><label className="sr-only" htmlFor={`requirement-section-${index}`}>Jenis pelayanan {index + 1}</label><select id={`requirement-section-${index}`} value={requirement.sectionId} onChange={(event) => changeRequirementSection(index, event.target.value)}>{data.sections.filter((item) => item.id === requirement.sectionId || !selectedSectionIds.has(item.id)).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><div className="number-stepper" role="group" aria-label={`Jumlah relawan untuk ${section?.name ?? `jenis ${index + 1}`}`}><button type="button" onClick={() => changeRequirementCount(index, requirement.neededCount - 1)} disabled={requirement.neededCount <= 1} aria-label="Kurangi jumlah relawan"><Minus size={15} /></button><label className="sr-only" htmlFor={`requirement-count-${index}`}>Jumlah relawan</label><input id={`requirement-count-${index}`} type="number" inputMode="numeric" min="1" max="50" value={requirement.neededCount} onChange={(event) => changeRequirementCount(index, Number(event.target.value))} /><button type="button" onClick={() => changeRequirementCount(index, requirement.neededCount + 1)} disabled={requirement.neededCount >= 50} aria-label="Tambah jumlah relawan"><Plus size={15} /></button></div><button className="icon-button danger requirement-remove" type="button" onClick={() => removeRequirement(index)} aria-label={`Hapus ${section?.name ?? "jenis pelayanan"}`}><Trash2 size={17} /></button></div>; })}</div> : <div className="requirement-empty"><Users size={19} /><span><strong>Belum ada kebutuhan relawan</strong><small>{data.sections.length ? "Klik Tambah jenis untuk menentukan tim kegiatan ini." : "Tambahkan jenis pelayanan melalui Pengaturan terlebih dahulu."}</small></span></div>}</fieldset><div className="date-preview"><div><CalendarDays size={18} /><span><strong>Pratinjau tanggal berikutnya</strong><small>{WEEKDAYS.find((day) => day.value === weekday)?.label}</small></span></div><div className="preview-dates">{preview.map((date) => <span key={date.startsAt}>{formatShortDate(date.startsAt, data.organization.timezone)}</span>)}</div></div>{error ? <p className="form-error" role="alert">{error}</p> : null}<footer><button className="button button-secondary" type="button" onClick={onClose}>Batal</button><button className="button button-primary" type="submit" disabled={saving}>{saving ? "Menyimpan..." : editing ? "Simpan perubahan" : "Simpan kegiatan"}</button></footer></form></Modal>;
 }
 

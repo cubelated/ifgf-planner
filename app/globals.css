@@ -1152,8 +1152,13 @@ a:focus-visible {
   width: 170px;
 }
 
-.event-filter {
+.event-filter,
+.month-filter {
   display: block;
+}
+
+.month-filter select {
+  width: 150px;
 }
 
 .schedule-draft {
@@ -1311,6 +1316,12 @@ a:focus-visible {
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+}
+
+.event-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .event-title h2 {
@@ -2020,6 +2031,89 @@ a:focus-visible {
   gap: 9px;
 }
 
+.button-danger {
+  border: 1px solid #e5baba;
+  background: #fff4f4;
+  color: #a43f3f;
+}
+
+.button-danger:hover:not(:disabled) {
+  border-color: #ce8585;
+  background: #fde8e8;
+}
+
+.delete-confirmation {
+  padding: 22px 24px 24px;
+}
+
+.delete-warning,
+.delete-loading {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  border: 1px solid #eccaca;
+  border-radius: 11px;
+  padding: 14px;
+  background: #fff7f7;
+  color: #9b4343;
+}
+
+.delete-warning > svg,
+.delete-loading > svg {
+  flex: 0 0 auto;
+}
+
+.delete-warning strong {
+  color: #713131;
+  font-size: 11px;
+}
+
+.delete-warning p {
+  margin: 4px 0 0;
+  color: #9b5d5d;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.delete-loading {
+  align-items: center;
+  color: var(--ink-500);
+}
+
+.delete-impact {
+  margin: 15px 0 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.delete-impact > div {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--surface-soft);
+}
+
+.delete-impact dt {
+  color: var(--ink-500);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.delete-impact dd {
+  margin: 7px 0 0;
+  color: var(--ink-950);
+  font-size: 18px;
+  font-weight: 750;
+}
+
+.delete-confirmation footer {
+  margin-top: 18px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
 .toast {
   position: fixed;
   right: 24px;
@@ -2531,6 +2625,7 @@ a:focus-visible {
   .requirement-row { grid-template-columns: minmax(0, 1fr) 36px; }
   .requirement-row > select { grid-column: 1 / -1; }
   .number-stepper { min-width: 0; }
+  .delete-impact { grid-template-columns: 1fr; }
 }
 @keyframes toast-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 
@@ -2855,6 +2950,11 @@ a:focus-visible {
   }
 
   .schedule-toolbar select {
+    width: 100%;
+  }
+
+  .schedule-toolbar .event-filter,
+  .schedule-toolbar .month-filter {
     width: 100%;
   }
 
