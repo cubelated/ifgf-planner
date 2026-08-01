@@ -1,6 +1,24 @@
 "use client";
 
 import {
+  DndContext,
+  KeyboardSensor,
+  MouseSensor,
+  TouchSensor,
+  closestCenter,
+  type DragEndEvent,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
   AlertCircle,
   Bell,
   CalendarCheck,
@@ -11,6 +29,7 @@ import {
   Clock3,
   Copy,
   Database,
+  GripVertical,
   LayoutDashboard,
   LoaderCircle,
   LogOut,
@@ -49,6 +68,7 @@ import {
   generateOccurrenceDates,
   loadPlannerData,
   publishSchedule,
+  reorderServiceSections,
   removeAssignment,
   saveEventGroup,
   saveVolunteer,
@@ -363,7 +383,7 @@ export default function PlannerApp() {
           {view === "volunteers" && canManage ? <Volunteers data={data} onAdd={() => setVolunteerDialog("new")} onEdit={setVolunteerDialog} /> : null}
           {view === "unavailability" ? <Unavailability data={data} onChanged={changed} showToast={showToast} /> : null}
           {view === "notifications" && canManage ? <Notifications showToast={showToast} /> : null}
-          {view === "settings" && canManage ? <SettingsView data={data} onChanged={changed} /> : null}
+          {view === "settings" && canManage ? <SettingsView key={data.sections.map((section) => section.id).join("|")} data={data} onChanged={changed} /> : null}
         </main>
       </div>
 
@@ -554,7 +574,7 @@ function Schedule({ data, canManage, onAssign, onChanged, showToast }: { data: P
       <section className="card schedule-board" aria-label="Papan jadwal pelayanan">
         {!upcoming.length ? <EmptyState icon={CalendarDays} title="Belum ada tanggal kegiatan" description="Tanggal mendatang akan muncul setelah koordinator menambahkan kegiatan." /> : !sections.length ? <EmptyState icon={Users} title="Belum ada kebutuhan tim" description="Tambahkan bagian pelayanan, lalu buat kegiatan dengan kebutuhan relawan." /> : <>
           <div className="schedule-table-wrap"><table className="schedule-table"><thead><tr><th>Bagian pelayanan</th>{upcoming.map((occurrence) => <th key={occurrence.id}><strong>{formatShortDate(occurrence.starts_at, data.organization.timezone)}</strong><span>{data.events.find((event) => event.id === occurrence.event_group_id)?.name}</span></th>)}</tr></thead><tbody>{sections.map((section) => <tr key={section.id}><th><strong>{section.name}</strong></th>{upcoming.map((occurrence) => <ScheduleCell key={occurrence.id} data={data} occurrence={occurrence} section={section} canManage={canManage} onOpen={() => onAssign({ occurrence, section })} />)}</tr>)}</tbody></table></div>
-          <div className="mobile-agenda">{upcoming.map((occurrence) => { const coverage = coverageFor(data, occurrence); const occurrenceSections = requirementsFor(data, occurrence).map((requirement) => data.sections.find((section) => section.id === requirement.section_id)).filter((section): section is ServiceSection => Boolean(section)); return <article key={occurrence.id}><header><div><strong>{formatShortDate(occurrence.starts_at, data.organization.timezone)}</strong><span>{data.events.find((event) => event.id === occurrence.event_group_id)?.name}</span></div><StatusPill tone={coverage.missing ? "attention" : "ready"}>{coverage.missing ? `${coverage.missing} kosong` : "Siap"}</StatusPill></header>{occurrenceSections.map((section) => <div className="mobile-assignment" key={section.id}><span>{section.name}</span><ScheduleCell mobile data={data} occurrence={occurrence} section={section} canManage={canManage} onOpen={() => onAssign({ occurrence, section })} /></div>)}</article>; })}</div>
+          <div className="mobile-agenda">{upcoming.map((occurrence) => { const coverage = coverageFor(data, occurrence); const requiredSectionIds = new Set(requirementsFor(data, occurrence).map((requirement) => requirement.section_id)); const occurrenceSections = data.sections.filter((section) => requiredSectionIds.has(section.id)); return <article key={occurrence.id}><header><div><strong>{formatShortDate(occurrence.starts_at, data.organization.timezone)}</strong><span>{data.events.find((event) => event.id === occurrence.event_group_id)?.name}</span></div><StatusPill tone={coverage.missing ? "attention" : "ready"}>{coverage.missing ? `${coverage.missing} kosong` : "Siap"}</StatusPill></header>{occurrenceSections.map((section) => <div className="mobile-assignment" key={section.id}><span>{section.name}</span><ScheduleCell mobile data={data} occurrence={occurrence} section={section} canManage={canManage} onOpen={() => onAssign({ occurrence, section })} /></div>)}</article>; })}</div>
         </>}
       </section>
     </>
@@ -606,17 +626,108 @@ function Notifications({ showToast }: { showToast: (message: string) => void }) 
   return <><PageHeader title="Notifikasi" description="Hubungkan LINE setelah data jadwal inti selesai disiapkan." /><section className="notification-grid"><article className="card line-card"><div className="line-logo">LINE</div><div><span className="eyebrow">INTEGRASI</span><h2>LINE Official Account</h2><p>Kirim penugasan, konfirmasi, dan pengingat langsung kepada relawan.</p></div><StatusPill tone="neutral">Belum terhubung</StatusPill><button className="button button-primary" type="button" onClick={() => showToast("Integrasi LINE akan dikerjakan pada tahap berikutnya.")}>Lihat tahap berikutnya <ChevronRight size={17} /></button></article></section></>;
 }
 
+function SortableServiceSection({
+  section,
+  position,
+  disabled,
+}: {
+  section: ServiceSection;
+  position: number;
+  disabled: boolean;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: section.id, disabled });
+
+  return (
+    <li
+      ref={setNodeRef}
+      className={isDragging ? "service-section-item is-dragging" : "service-section-item"}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+    >
+      <button
+        className="drag-handle"
+        type="button"
+        aria-label={`Ubah urutan ${section.name}`}
+        title="Seret atau gunakan tombol panah untuk mengubah urutan"
+        disabled={disabled}
+        {...attributes}
+        {...listeners}
+      >
+        <GripVertical size={19} />
+      </button>
+      <span className="service-section-position">{position}</span>
+      <strong>{section.name}</strong>
+    </li>
+  );
+}
+
 function SettingsView({ data, onChanged }: { data: PlannerData; onChanged: (message: string) => Promise<void> }) {
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
+  const [reordering, setReordering] = useState(false);
   const [error, setError] = useState("");
+  const [orderedSections, setOrderedSections] = useState(data.sections);
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
   async function addSection(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setSaving(true); setError("");
-    try { await createServiceSection({ organizationId: data.organization.id, name }); setName(""); await onChanged("Bagian pelayanan berhasil ditambahkan."); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Bagian tidak dapat disimpan."); }
-    finally { setSaving(false); }
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    const sortOrder = orderedSections.reduce(
+      (highest, section) => Math.max(highest, section.sort_order),
+      -1,
+    ) + 1;
+    try {
+      await createServiceSection({
+        organizationId: data.organization.id,
+        name,
+        sortOrder,
+      });
+      setName("");
+      await onChanged("Bagian pelayanan berhasil ditambahkan.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Bagian tidak dapat disimpan.");
+    } finally {
+      setSaving(false);
+    }
   }
-  return <><PageHeader title="Pengaturan" description="Atur struktur pelayanan dan bahasa aplikasi." /><section className="settings-grid"><article className="card settings-card section-settings"><div><span className="settings-icon"><Users size={20} /></span><div><h2>Bagian pelayanan</h2><p>Bagian ini digunakan untuk kualifikasi dan kebutuhan jadwal.</p></div></div><form className="section-form" onSubmit={addSection}><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Contoh: Worship" required /><button className="button button-primary" type="submit" disabled={saving}><Plus size={17} /> Tambah</button></form>{error ? <p className="form-error" role="alert">{error}</p> : null}<div className="section-list">{data.sections.length ? data.sections.map((section) => <span key={section.id}>{section.name}</span>) : <small>Belum ada bagian pelayanan.</small>}</div></article><article className="card settings-card"><div><span className="settings-icon"><MessageCircle size={20} /></span><div><h2>Bahasa aplikasi</h2><p>Bahasa untuk koordinator dan portal relawan.</p></div></div><div className="language-options"><button className="selected" type="button"><span>ID</span><strong>Bahasa Indonesia</strong><Check size={17} /></button><button type="button" disabled><span>EN</span><strong>English</strong><small>Segera</small></button><button type="button" disabled><span>繁</span><strong>繁體中文</strong><small>Segera</small></button></div></article></section></>;
+
+  async function finishReorder(event: DragEndEvent) {
+    if (!event.over || event.active.id === event.over.id) return;
+    const previousIndex = orderedSections.findIndex((section) => section.id === event.active.id);
+    const nextIndex = orderedSections.findIndex((section) => section.id === event.over?.id);
+    if (previousIndex < 0 || nextIndex < 0) return;
+
+    const previousOrder = orderedSections;
+    const nextOrder = arrayMove(previousOrder, previousIndex, nextIndex);
+    setOrderedSections(nextOrder);
+    setReordering(true);
+    setError("");
+    try {
+      await reorderServiceSections({
+        organizationId: data.organization.id,
+        sectionIds: nextOrder.map((section) => section.id),
+      });
+      await onChanged("Urutan bagian pelayanan berhasil diperbarui.");
+    } catch (cause) {
+      setOrderedSections(previousOrder);
+      setError(cause instanceof Error ? cause.message : "Urutan tidak dapat disimpan.");
+    } finally {
+      setReordering(false);
+    }
+  }
+
+  return <><PageHeader title="Pengaturan" description="Atur struktur pelayanan dan bahasa aplikasi." /><section className="settings-grid"><article className="card settings-card section-settings"><div><span className="settings-icon"><Users size={20} /></span><div><h2>Bagian pelayanan</h2><p>Bagian ini digunakan untuk kualifikasi dan kebutuhan jadwal.</p></div></div><form className="section-form" onSubmit={addSection}><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Contoh: Worship" required /><button className="button button-primary" type="submit" disabled={saving || reordering}><Plus size={17} /> Tambah</button></form>{error ? <p className="form-error" role="alert">{error}</p> : null}{orderedSections.length ? <div className="service-section-order"><div className="service-section-order-heading"><div><strong>Urutan tampilan</strong><small>Seret jenis pelayanan untuk menentukan urutannya pada jadwal.</small></div>{reordering ? <span><LoaderCircle className="spin" size={15} /> Menyimpan...</span> : null}</div><DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={finishReorder}><SortableContext items={orderedSections.map((section) => section.id)} strategy={verticalListSortingStrategy}><ol className="service-section-list">{orderedSections.map((section, index) => <SortableServiceSection key={section.id} section={section} position={index + 1} disabled={reordering} />)}</ol></SortableContext></DndContext></div> : <small>Belum ada bagian pelayanan.</small>}</article><article className="card settings-card"><div><span className="settings-icon"><MessageCircle size={20} /></span><div><h2>Bahasa aplikasi</h2><p>Bahasa untuk koordinator dan portal relawan.</p></div></div><div className="language-options"><button className="selected" type="button"><span>ID</span><strong>Bahasa Indonesia</strong><Check size={17} /></button><button type="button" disabled><span>EN</span><strong>English</strong><small>Segera</small></button><button type="button" disabled><span>繁</span><strong>繁體中文</strong><small>Segera</small></button></div></article></section></>;
 }
 
 function EventDialog({ data, eventGroup, onClose, onSaved }: { data: PlannerData; eventGroup: EventGroup | null; onClose: () => void; onSaved: () => Promise<void> }) {
@@ -629,7 +740,14 @@ function EventDialog({ data, eventGroup, onClose, onSaved }: { data: PlannerData
   const [customWeeks, setCustomWeeks] = useState<number[]>(eventGroup ? [...eventGroup.week_occurrences] : [1, 3]);
   const [requirements, setRequirements] = useState<Array<{ sectionId: string; neededCount: number }>>(
     eventGroup
-      ? data.requirements.filter((requirement) => requirement.event_group_id === eventGroup.id).map((requirement) => ({ sectionId: requirement.section_id, neededCount: requirement.needed_count }))
+      ? data.sections.flatMap((section) => {
+          const requirement = data.requirements.find(
+            (item) => item.event_group_id === eventGroup.id && item.section_id === section.id,
+          );
+          return requirement
+            ? [{ sectionId: section.id, neededCount: requirement.needed_count }]
+            : [];
+        })
       : [],
   );
   const [saving, setSaving] = useState(false);
@@ -683,23 +801,30 @@ function AssignmentDialog({ data, target, onClose, onChanged }: { data: PlannerD
   const [working, setWorking] = useState(false); const [error, setError] = useState("");
   const existing = assignmentsFor(data, target.occurrence.id, target.section.id);
   const assignedHere = new Set(existing.map((assignment) => assignment.volunteer_id));
-  const occupied = new Set(assignmentsFor(data, target.occurrence.id).map((assignment) => assignment.volunteer_id));
+  const occurrenceAssignments = assignmentsFor(data, target.occurrence.id);
   const unavailable = new Set(data.unavailability.filter((absence) => absence.occurrence_id === target.occurrence.id).map((absence) => absence.volunteer_id));
   const eligible = new Set(data.eligibilities.filter((item) => item.section_id === target.section.id).map((item) => item.volunteer_id));
   const groupMembers = new Set(data.eventGroupVolunteers.filter((item) => item.event_group_id === target.occurrence.event_group_id).map((item) => item.volunteer_id));
   const qualified = data.volunteers.filter((volunteer) => eligible.has(volunteer.id));
-  const candidates = qualified.filter((volunteer) => volunteer.status === "active" && !occupied.has(volunteer.id) && !unavailable.has(volunteer.id));
+  const candidates = qualified.filter((volunteer) => volunteer.status === "active" && !assignedHere.has(volunteer.id) && !unavailable.has(volunteer.id));
   const blocked = qualified.filter((volunteer) => !assignedHere.has(volunteer.id) && !candidates.some((candidate) => candidate.id === volunteer.id));
   const eventName = data.events.find((event) => event.id === target.occurrence.event_group_id)?.name ?? "kegiatan ini";
+  function otherSectionNames(volunteerId: string) {
+    const sectionIds = new Set(
+      occurrenceAssignments
+        .filter((assignment) => assignment.volunteer_id === volunteerId && assignment.section_id !== target.section.id)
+        .map((assignment) => assignment.section_id),
+    );
+    return data.sections.filter((section) => sectionIds.has(section.id)).map((section) => section.name);
+  }
   function blockedReason(volunteer: Volunteer) {
     if (volunteer.status !== "active") return volunteer.status === "resting" ? "Sedang istirahat" : "Tidak aktif";
     if (unavailable.has(volunteer.id)) return "Tidak tersedia pada tanggal ini";
-    if (occupied.has(volunteer.id)) return "Sudah bertugas di bagian lain pada kegiatan ini";
     return "Tidak dapat dipilih";
   }
   async function assign(volunteerId: string) { const addToEventGroup = !groupMembers.has(volunteerId); setWorking(true); setError(""); try { await assignVolunteer({ organizationId: data.organization.id, eventGroupId: target.occurrence.event_group_id, occurrenceId: target.occurrence.id, sectionId: target.section.id, volunteerId, addToEventGroup }); await onChanged(addToEventGroup ? `Relawan ditambahkan ke ${eventName} dan berhasil ditugaskan.` : "Relawan berhasil ditugaskan."); } catch (cause) { setError(cause instanceof Error ? cause.message : "Penugasan gagal."); } finally { setWorking(false); } }
   async function remove(id: string) { setWorking(true); setError(""); try { await removeAssignment(id); await onChanged("Penugasan berhasil dihapus."); } catch (cause) { setError(cause instanceof Error ? cause.message : "Penugasan tidak dapat dihapus."); } finally { setWorking(false); } }
-  return <Modal title={target.section.name} eyebrow="ATUR PENUGASAN" description={`${eventName} • ${formatDate(target.occurrence.starts_at, data.organization.timezone)}`} onClose={onClose}><div className="assignment-manager"><h3>Sudah ditugaskan</h3>{existing.length ? existing.map((assignment) => { const volunteer = data.volunteers.find((item) => item.id === assignment.volunteer_id); return <div className="assignment-person" key={assignment.id}><Avatar name={volunteer?.full_name ?? "Relawan"} /><strong>{volunteer?.full_name}</strong><button type="button" className="icon-button danger" disabled={working} onClick={() => remove(assignment.id)} aria-label="Hapus penugasan"><Trash2 size={17} /></button></div>; }) : <p>Belum ada relawan.</p>}<h3>Relawan yang menguasai bagian ini</h3>{candidates.length ? candidates.map((volunteer, index) => { const isGroupMember = groupMembers.has(volunteer.id); return <button type="button" className={isGroupMember ? "candidate-button" : "candidate-button candidate-add-group"} key={volunteer.id} disabled={working} onClick={() => assign(volunteer.id)}><Avatar name={volunteer.full_name} tone={index} /><span><strong>{volunteer.full_name}</strong><small>{isGroupMember ? "Tersedia dan siap ditugaskan" : `Belum tergabung ${eventName} • tambahkan dan tugaskan`}</small></span><Plus size={17} /></button>; }) : <div className="inline-alert"><AlertCircle size={18} /><span>Belum ada relawan aktif yang menguasai bagian ini dan tersedia pada tanggal tersebut.</span></div>}{blocked.length ? <div className="blocked-candidates"><h3>Tidak dapat dipilih saat ini</h3>{blocked.map((volunteer, index) => <div className="candidate-blocked" key={volunteer.id}><Avatar name={volunteer.full_name} tone={index + candidates.length} /><span><strong>{volunteer.full_name}</strong><small>{blockedReason(volunteer)}</small></span></div>)}</div> : null}{error ? <p className="form-error" role="alert">{error}</p> : null}</div></Modal>;
+  return <Modal title={target.section.name} eyebrow="ATUR PENUGASAN" description={`${eventName} • ${formatDate(target.occurrence.starts_at, data.organization.timezone)}`} onClose={onClose}><div className="assignment-manager"><h3>Sudah ditugaskan</h3>{existing.length ? existing.map((assignment) => { const volunteer = data.volunteers.find((item) => item.id === assignment.volunteer_id); return <div className="assignment-person" key={assignment.id}><Avatar name={volunteer?.full_name ?? "Relawan"} /><strong>{volunteer?.full_name}</strong><button type="button" className="icon-button danger" disabled={working} onClick={() => remove(assignment.id)} aria-label="Hapus penugasan"><Trash2 size={17} /></button></div>; }) : <p>Belum ada relawan.</p>}<h3>Relawan yang menguasai bagian ini</h3>{candidates.length ? candidates.map((volunteer, index) => { const isGroupMember = groupMembers.has(volunteer.id); const otherSections = otherSectionNames(volunteer.id); const className = ["candidate-button", !isGroupMember ? "candidate-add-group" : "", otherSections.length ? "candidate-already-assigned" : ""].filter(Boolean).join(" "); return <button type="button" className={className} key={volunteer.id} disabled={working} onClick={() => assign(volunteer.id)}><Avatar name={volunteer.full_name} tone={index} /><span><strong>{volunteer.full_name}</strong>{otherSections.length ? <small className="candidate-warning"><AlertCircle size={13} /><span>Sudah bertugas: {otherSections.join(", ")} • tetap dapat ditambahkan</span></small> : <small>{isGroupMember ? "Tersedia dan siap ditugaskan" : `Belum tergabung ${eventName} • tambahkan dan tugaskan`}</small>}</span><Plus size={17} /></button>; }) : <div className="inline-alert"><AlertCircle size={18} /><span>Belum ada relawan aktif yang menguasai bagian ini dan tersedia pada tanggal tersebut.</span></div>}{blocked.length ? <div className="blocked-candidates"><h3>Tidak dapat dipilih saat ini</h3>{blocked.map((volunteer, index) => <div className="candidate-blocked" key={volunteer.id}><Avatar name={volunteer.full_name} tone={index + candidates.length} /><span><strong>{volunteer.full_name}</strong><small>{blockedReason(volunteer)}</small></span></div>)}</div> : null}{error ? <p className="form-error" role="alert">{error}</p> : null}</div></Modal>;
 }
 
 function Modal({ title, eyebrow, description, onClose, children }: { title: string; eyebrow: string; description: string; onClose: () => void; children: ReactNode }) {
