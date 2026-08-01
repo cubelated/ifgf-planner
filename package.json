@@ -42,7 +42,5 @@
     "wrangler": "4.92.0"
   },
   "type": "module",
-  "displayName": "IFGF Planner",
-  "dev": "vite",
-  "start": "vinext start"
+  "displayName": "IFGF Planner"
 }

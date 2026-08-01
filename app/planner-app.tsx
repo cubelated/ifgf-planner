@@ -11,8 +11,9 @@ import {
   CircleHelp,
   Clock3,
   Copy,
+  Database,
   LayoutDashboard,
-  LineChart,
+  LoaderCircle,
   LogOut,
   Menu,
   MessageCircle,
@@ -22,6 +23,7 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  Trash2,
   UserCheck,
   UserRound,
   Users,
@@ -29,10 +31,34 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase";
+import type { User } from "@supabase/supabase-js";
+import {
+  type FormEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { APP_CONFIG } from "@/lib/config";
 import { translate, type MessageKey } from "@/lib/i18n";
+import {
+  assignVolunteer,
+  createEventGroup,
+  createServiceSection,
+  generateOccurrenceDates,
+  loadPlannerData,
+  publishSchedule,
+  removeAssignment,
+  saveVolunteer,
+  submitUnavailability,
+  type EventGroup,
+  type EventOccurrence,
+  type PlannerData,
+  type ServiceSection,
+  type Volunteer,
+} from "@/lib/planner-data";
+import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase";
 
 type View =
   | "overview"
@@ -43,199 +69,163 @@ type View =
   | "notifications"
   | "settings";
 
-type EventGroup = {
-  id: number;
-  name: string;
-  cadence: string;
-  nextDate: string;
-  sections: number;
-  tone: "blue" | "violet" | "teal" | "amber";
-};
-
 const NAV_ITEMS: Array<{
   key: View;
   label: MessageKey;
   icon: LucideIcon;
-  badge?: number;
+  coordinatorOnly?: boolean;
 }> = [
   { key: "overview", label: "overview", icon: LayoutDashboard },
-  { key: "schedule", label: "schedule", icon: CalendarDays, badge: 2 },
-  { key: "events", label: "events", icon: CalendarCheck },
-  { key: "volunteers", label: "volunteers", icon: Users },
-  {
-    key: "unavailability",
-    label: "unavailability",
-    icon: UserRound,
-    badge: 3,
-  },
-  { key: "notifications", label: "notifications", icon: Bell },
+  { key: "schedule", label: "schedule", icon: CalendarDays },
+  { key: "events", label: "events", icon: CalendarCheck, coordinatorOnly: true },
+  { key: "volunteers", label: "volunteers", icon: Users, coordinatorOnly: true },
+  { key: "unavailability", label: "unavailability", icon: UserRound },
+  { key: "notifications", label: "notifications", icon: Bell, coordinatorOnly: true },
 ];
 
-const INITIAL_EVENTS: EventGroup[] = [
-  {
-    id: 1,
-    name: "Sunday Service",
-    cadence: "Setiap Minggu • 09.00",
-    nextDate: "2 Agustus 2026",
-    sections: 6,
-    tone: "blue",
-  },
-  {
-    id: 2,
-    name: "Doa Sabtu",
-    cadence: "Minggu ke-1 & 3 • 18.30",
-    nextDate: "15 Agustus 2026",
-    sections: 3,
-    tone: "violet",
-  },
-  {
-    id: 3,
-    name: "Komsel Rabu",
-    cadence: "Setiap Rabu • 19.00",
-    nextDate: "5 Agustus 2026",
-    sections: 2,
-    tone: "teal",
-  },
+const WEEKDAYS = [
+  { value: 0, label: "Minggu" },
+  { value: 1, label: "Senin" },
+  { value: 2, label: "Selasa" },
+  { value: 3, label: "Rabu" },
+  { value: 4, label: "Kamis" },
+  { value: 5, label: "Jumat" },
+  { value: 6, label: "Sabtu" },
 ];
 
-const VOLUNTEERS = [
-  {
-    name: "Alicia Tan",
-    initials: "AT",
-    sections: ["Worship", "Vokal"],
-    events: "Sunday Service",
-    served: 3,
-    status: "Aktif",
-  },
-  {
-    name: "Budi Santoso",
-    initials: "BS",
-    sections: ["Usher", "Multimedia"],
-    events: "Sunday Service, Doa Sabtu",
-    served: 2,
-    status: "Aktif",
-  },
-  {
-    name: "Christina Lim",
-    initials: "CL",
-    sections: ["Kids", "Usher"],
-    events: "Sunday Service",
-    served: 4,
-    status: "Aktif",
-  },
-  {
-    name: "Daniel Wijaya",
-    initials: "DW",
-    sections: ["Worship", "Multimedia"],
-    events: "Sunday Service, Komsel Rabu",
-    served: 2,
-    status: "Aktif",
-  },
-  {
-    name: "Evelyn Hartono",
-    initials: "EH",
-    sections: ["Prayer", "Vokal"],
-    events: "Doa Sabtu, Komsel Rabu",
-    served: 1,
-    status: "Istirahat",
-  },
-];
+const PATTERN_OPTIONS = [
+  { value: "every_week", label: "Setiap minggu", weeks: [1, 2, 3, 4, 5] },
+  { value: "weeks_1_3", label: "Minggu ke-1 dan ke-3", weeks: [1, 3] },
+  { value: "weeks_2_4", label: "Minggu ke-2 dan ke-4", weeks: [2, 4] },
+  { value: "except_5", label: "Setiap minggu kecuali minggu ke-5", weeks: [1, 2, 3, 4] },
+  { value: "custom", label: "Pilihan khusus", weeks: [] },
+] as const;
 
-const ABSENCE_DATES = [
-  { day: "Min", date: "02", month: "Agu" },
-  { day: "Rab", date: "05", month: "Agu" },
-  { day: "Sab", date: "08", month: "Agu" },
-  { day: "Min", date: "09", month: "Agu" },
-  { day: "Rab", date: "12", month: "Agu" },
-  { day: "Sab", date: "15", month: "Agu" },
-];
+function initials(name: string) {
+  return name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("") || "?";
+}
 
-const SCHEDULE_COLUMNS = [
-  { day: "Min, 2 Agu", event: "Sunday Service" },
-  { day: "Min, 9 Agu", event: "Sunday Service" },
-  { day: "Sab, 15 Agu", event: "Doa Sabtu" },
-];
+function formatDate(value: string, timezone: string, options?: Intl.DateTimeFormatOptions) {
+  return new Intl.DateTimeFormat("id-ID", {
+    timeZone: timezone,
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    ...options,
+  }).format(new Date(value));
+}
 
-const SCHEDULE_ROWS = [
-  {
-    section: "Worship",
-    count: "2 orang",
-    cells: [
-      ["Alicia Tan", "Daniel Wijaya"],
-      ["Alicia Tan", "Perlu relawan"],
-      ["Evelyn Hartono"],
-    ],
-  },
-  {
-    section: "Usher",
-    count: "2 orang",
-    cells: [
-      ["Budi Santoso", "Christina Lim"],
-      ["Budi Santoso", "Christina Lim"],
-      ["Perlu relawan"],
-    ],
-  },
-  {
-    section: "Multimedia",
-    count: "1 orang",
-    cells: [["Budi Santoso"], ["Daniel Wijaya"], ["Budi Santoso"]],
-  },
-  {
-    section: "Kids",
-    count: "2 orang",
-    cells: [
-      ["Christina Lim", "Grace Ho"],
-      ["Grace Ho", "Perlu relawan"],
-      ["—"],
-    ],
-  },
-];
+function formatShortDate(value: string, timezone: string) {
+  return new Intl.DateTimeFormat("id-ID", {
+    timeZone: timezone,
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  }).format(new Date(value));
+}
+
+function formatTime(value: string, timezone: string) {
+  return new Intl.DateTimeFormat("id-ID", {
+    timeZone: timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(value));
+}
+
+function recurrenceLabel(event: EventGroup) {
+  const pattern = PATTERN_OPTIONS.find((option) => option.value === event.recurrence_pattern);
+  return `${pattern?.label ?? "Pola khusus"} • ${event.start_time.slice(0, 5)}`;
+}
 
 function Logo({ large = false }: { large?: boolean }) {
   return (
     <div className={large ? "logo-crop logo-crop-large" : "logo-crop"}>
-      {/* The supplied asset intentionally has generous transparent padding. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src="/ifgf-logo.png" alt={APP_CONFIG.logoAlt} />
     </div>
   );
 }
 
-function Avatar({ initials, tone = 0 }: { initials: string; tone?: number }) {
-  return <span className={`avatar avatar-${tone % 5}`}>{initials}</span>;
+function Avatar({ name, tone = 0 }: { name: string; tone?: number }) {
+  return <span className={`avatar avatar-${tone % 5}`}>{initials(name)}</span>;
 }
 
-function StatusPill({ children, tone }: { children: React.ReactNode; tone: string }) {
+function StatusPill({ children, tone }: { children: ReactNode; tone: string }) {
   return <span className={`status-pill status-${tone}`}>{children}</span>;
+}
+
+function EmptyState({ icon: Icon, title, description, action }: {
+  icon: LucideIcon;
+  title: string;
+  description: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="empty-state">
+      <span><Icon size={24} /></span>
+      <h3>{title}</h3>
+      <p>{description}</p>
+      {action}
+    </div>
+  );
 }
 
 export default function PlannerApp() {
   const configured = isSupabaseConfigured();
-  const [authenticated, setAuthenticated] = useState(!configured);
+  const [authChecked, setAuthChecked] = useState(!configured);
+  const [user, setUser] = useState<User | null>(null);
+  const [data, setData] = useState<PlannerData | null>(null);
+  const [dataState, setDataState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [dataError, setDataError] = useState("");
   const [view, setView] = useState<View>("overview");
   const [menuOpen, setMenuOpen] = useState(false);
   const [eventDialog, setEventDialog] = useState(false);
-  const [events, setEvents] = useState(INITIAL_EVENTS);
+  const [volunteerDialog, setVolunteerDialog] = useState<Volunteer | "new" | null>(null);
+  const [assignmentTarget, setAssignmentTarget] = useState<{
+    occurrence: EventOccurrence;
+    section: ServiceSection;
+  } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [email, setEmail] = useState("");
-  const [loginState, setLoginState] = useState<
-    "idle" | "sending" | "sent" | "error"
-  >("idle");
+  const [loginState, setLoginState] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [loginError, setLoginError] = useState("");
+
+  const refresh = useCallback(async (targetUser: User) => {
+    setDataState("loading");
+    setDataError("");
+    try {
+      setData(await loadPlannerData(targetUser));
+      setDataState("ready");
+    } catch (error) {
+      setDataState("error");
+      setDataError(error instanceof Error ? error.message : "Data tidak dapat dimuat.");
+    }
+  }, []);
 
   useEffect(() => {
     if (!configured) return;
     const supabase = getSupabaseBrowserClient();
-    supabase.auth.getSession().then(({ data }) => {
-      setAuthenticated(Boolean(data.session));
+    supabase.auth.getSession().then(({ data: sessionData }) => {
+      const sessionUser = sessionData.session?.user ?? null;
+      setUser(sessionUser);
+      setAuthChecked(true);
+      if (sessionUser) void refresh(sessionUser);
     });
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setAuthenticated(Boolean(session));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      const sessionUser = session?.user ?? null;
+      setUser(sessionUser);
+      setAuthChecked(true);
+      if (sessionUser) void refresh(sessionUser);
+      else setData(null);
     });
-    return () => subscription.unsubscribe();
-  }, [configured]);
+    return () => listener.subscription.unsubscribe();
+  }, [configured, refresh]);
 
   useEffect(() => {
     if (!toast) return;
@@ -243,24 +233,22 @@ export default function PlannerApp() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  function showToast(message: string) {
+    setToast(null);
+    window.setTimeout(() => setToast(message), 20);
+  }
+
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!configured) {
-      setAuthenticated(true);
-      return;
-    }
-
     setLoginState("sending");
     setLoginError("");
-    const supabase = getSupabaseBrowserClient();
-    const { error } = await supabase.auth.signInWithOtp({
+    const { error } = await getSupabaseBrowserClient().auth.signInWithOtp({
       email,
       options: {
         shouldCreateUser: false,
         emailRedirectTo: window.location.origin,
       },
     });
-
     if (error) {
       setLoginState("error");
       setLoginError(error.message);
@@ -271,863 +259,402 @@ export default function PlannerApp() {
 
   async function handleLogout() {
     if (configured) await getSupabaseBrowserClient().auth.signOut();
-    setAuthenticated(false);
+    setUser(null);
+    setData(null);
     setView("overview");
   }
 
-  function showToast(message: string) {
-    setToast(null);
-    window.setTimeout(() => setToast(message), 20);
-  }
-
-  if (!authenticated) {
+  if (!configured) return <ConfigurationRequired />;
+  if (!authChecked) return <LoadingScreen label="Memeriksa sesi..." />;
+  if (!user) {
     return (
       <LoginScreen
-        configured={configured}
         email={email}
         setEmail={setEmail}
         loginState={loginState}
         loginError={loginError}
         onSubmit={handleLogin}
-        onDemo={() => setAuthenticated(true)}
       />
     );
+  }
+  if (dataState === "loading" && !data) return <LoadingScreen label="Memuat data pelayanan..." />;
+  if (dataState === "error" || !data) {
+    return <DataError message={dataError} onRetry={() => void refresh(user)} onLogout={handleLogout} />;
+  }
+
+  const canManage = data.membership.role === "owner" || data.membership.role === "coordinator";
+  const upcoming = data.occurrences.filter((occurrence) => new Date(occurrence.starts_at) >= new Date());
+  const unfilled = countUnfilled(data, upcoming.slice(0, 8));
+  const visibleNav = NAV_ITEMS.filter((item) => canManage || !item.coordinatorOnly);
+  const roleLabel = data.membership.role === "owner"
+    ? "Pemilik"
+    : data.membership.role === "coordinator"
+      ? "Koordinator"
+      : "Relawan";
+
+  function navBadge(key: View) {
+    if (key === "schedule" && unfilled > 0) return unfilled;
+    if (key === "unavailability" && data.unavailability.length > 0) return data.unavailability.length;
+    return 0;
+  }
+
+  async function changed(message: string) {
+    await refresh(user);
+    showToast(message);
   }
 
   return (
     <div className="app-shell">
-      <a className="skip-link" href="#main-content">
-        Lewati ke konten utama
-      </a>
+      <a className="skip-link" href="#main-content">Lewati ke konten utama</a>
       <aside className={`sidebar ${menuOpen ? "sidebar-open" : ""}`}>
         <div className="sidebar-brand">
           <Logo />
-          <div>
-            <strong>{APP_CONFIG.name}</strong>
-            <span>{APP_CONFIG.workspaceLabel}</span>
-          </div>
-          <button
-            type="button"
-            className="icon-button sidebar-close"
-            onClick={() => setMenuOpen(false)}
-            aria-label="Tutup menu"
-          >
-            <X size={20} />
-          </button>
+          <div><strong>{APP_CONFIG.name}</strong><span>{data.organization.name}</span></div>
+          <button type="button" className="icon-button sidebar-close" onClick={() => setMenuOpen(false)} aria-label="Tutup menu"><X size={20} /></button>
         </div>
-
         <nav className="side-nav" aria-label="Navigasi utama">
           <p className="nav-caption">RUANG KERJA</p>
-          {NAV_ITEMS.map((item) => {
+          {visibleNav.map((item) => {
             const Icon = item.icon;
+            const badge = navBadge(item.key);
             return (
-              <button
-                key={item.key}
-                type="button"
-                className={view === item.key ? "nav-item active" : "nav-item"}
-                onClick={() => {
-                  setView(item.key);
-                  setMenuOpen(false);
-                }}
-              >
+              <button key={item.key} type="button" className={view === item.key ? "nav-item active" : "nav-item"} onClick={() => { setView(item.key); setMenuOpen(false); }}>
                 <Icon size={19} strokeWidth={1.9} />
                 <span>{translate(item.label)}</span>
-                {item.badge ? <b>{item.badge}</b> : null}
+                {badge ? <b>{badge > 99 ? "99+" : badge}</b> : null}
               </button>
             );
           })}
-          <p className="nav-caption nav-caption-second">SISTEM</p>
-          <button
-            type="button"
-            className={view === "settings" ? "nav-item active" : "nav-item"}
-            onClick={() => {
-              setView("settings");
-              setMenuOpen(false);
-            }}
-          >
-            <Settings size={19} strokeWidth={1.9} />
-            <span>{translate("settings")}</span>
-          </button>
+          {canManage ? (
+            <>
+              <p className="nav-caption nav-caption-second">SISTEM</p>
+              <button type="button" className={view === "settings" ? "nav-item active" : "nav-item"} onClick={() => { setView("settings"); setMenuOpen(false); }}>
+                <Settings size={19} strokeWidth={1.9} /><span>{translate("settings")}</span>
+              </button>
+            </>
+          ) : null}
         </nav>
-
         <div className="sidebar-account">
-          <Avatar initials="HW" tone={1} />
-          <div>
-            <strong>Hanssen Wijaya</strong>
-            <span>{translate("coordinator")}</span>
-          </div>
-          <button
-            className="icon-button"
-            type="button"
-            onClick={handleLogout}
-            aria-label={translate("signOut")}
-            title={translate("signOut")}
-          >
-            <LogOut size={18} />
-          </button>
+          <Avatar name={data.profile.full_name} tone={1} />
+          <div><strong>{data.profile.full_name}</strong><span>{roleLabel}</span></div>
+          <button className="icon-button" type="button" onClick={handleLogout} aria-label={translate("signOut")} title={translate("signOut")}><LogOut size={18} /></button>
         </div>
       </aside>
 
-      {menuOpen ? (
-        <button
-          type="button"
-          className="sidebar-backdrop"
-          aria-label="Tutup menu"
-          onClick={() => setMenuOpen(false)}
-        />
-      ) : null}
+      {menuOpen ? <button type="button" className="sidebar-backdrop" aria-label="Tutup menu" onClick={() => setMenuOpen(false)} /> : null}
 
       <div className="app-main">
         <header className="topbar">
-          <button
-            type="button"
-            className="icon-button mobile-menu"
-            onClick={() => setMenuOpen(true)}
-            aria-label="Buka menu"
-          >
-            <Menu size={22} />
-          </button>
-          <div className="mobile-brand">
-            <strong>{APP_CONFIG.name}</strong>
-          </div>
-          <label className="global-search">
-            <Search size={18} />
-            <span className="sr-only">Cari relawan, kegiatan, atau jadwal</span>
-            <input placeholder="Cari relawan, kegiatan, atau jadwal..." />
-            <kbd>⌘ K</kbd>
-          </label>
+          <button type="button" className="icon-button mobile-menu" onClick={() => setMenuOpen(true)} aria-label="Buka menu"><Menu size={22} /></button>
+          <div className="mobile-brand"><strong>{APP_CONFIG.name}</strong></div>
+          <label className="global-search"><Search size={18} /><span className="sr-only">Cari relawan, kegiatan, atau jadwal</span><input placeholder="Cari relawan, kegiatan, atau jadwal..." /><kbd>⌘ K</kbd></label>
           <div className="topbar-actions">
-            {!configured ? <span className="demo-badge">Mode demo</span> : null}
-            <button type="button" className="icon-button" aria-label="Bantuan">
-              <CircleHelp size={20} />
-            </button>
-            <button
-              type="button"
-              className="icon-button notification-button"
-              aria-label="Notifikasi baru"
-              onClick={() => setView("notifications")}
-            >
-              <Bell size={20} />
-              <span />
-            </button>
+            {dataState === "loading" ? <LoaderCircle className="spin" size={18} aria-label="Memperbarui data" /> : null}
+            <button type="button" className="icon-button" aria-label="Bantuan"><CircleHelp size={20} /></button>
+            <button type="button" className="icon-button notification-button" aria-label="Notifikasi" onClick={() => canManage && setView("notifications")}><Bell size={20} />{unfilled ? <span /> : null}</button>
           </div>
         </header>
 
         <main id="main-content" className="content">
-          {view === "overview" ? (
-            <Overview
-              onNavigate={setView}
-              onAddEvent={() => setEventDialog(true)}
-              showToast={showToast}
-            />
-          ) : null}
-          {view === "schedule" ? <Schedule showToast={showToast} /> : null}
-          {view === "events" ? (
-            <Events events={events} onAdd={() => setEventDialog(true)} />
-          ) : null}
-          {view === "volunteers" ? <Volunteers /> : null}
-          {view === "unavailability" ? (
-            <Unavailability showToast={showToast} />
-          ) : null}
-          {view === "notifications" ? (
-            <Notifications showToast={showToast} />
-          ) : null}
-          {view === "settings" ? <SettingsView /> : null}
+          {view === "overview" ? <Overview data={data} canManage={canManage} onNavigate={setView} onAddEvent={() => setEventDialog(true)} /> : null}
+          {view === "schedule" ? <Schedule data={data} canManage={canManage} onAssign={setAssignmentTarget} onChanged={changed} showToast={showToast} /> : null}
+          {view === "events" && canManage ? <Events data={data} onAdd={() => setEventDialog(true)} /> : null}
+          {view === "volunteers" && canManage ? <Volunteers data={data} onAdd={() => setVolunteerDialog("new")} onEdit={setVolunteerDialog} /> : null}
+          {view === "unavailability" ? <Unavailability data={data} onChanged={changed} showToast={showToast} /> : null}
+          {view === "notifications" && canManage ? <Notifications showToast={showToast} /> : null}
+          {view === "settings" && canManage ? <SettingsView data={data} onChanged={changed} /> : null}
         </main>
       </div>
 
-      {eventDialog ? (
-        <EventDialog
-          onClose={() => setEventDialog(false)}
-          onSave={(newEvent) => {
-            setEvents((current) => [...current, newEvent]);
-            setEventDialog(false);
-            setView("events");
-            showToast("Kegiatan baru berhasil ditambahkan.");
-          }}
-        />
-      ) : null}
+      {eventDialog ? <EventDialog data={data} onClose={() => setEventDialog(false)} onSaved={async () => { setEventDialog(false); setView("events"); await changed("Kegiatan dan tanggal berikutnya berhasil dibuat."); }} /> : null}
+      {volunteerDialog ? <VolunteerDialog data={data} volunteer={volunteerDialog === "new" ? null : volunteerDialog} onClose={() => setVolunteerDialog(null)} onSaved={async () => { setVolunteerDialog(null); await changed(volunteerDialog === "new" ? "Relawan berhasil ditambahkan." : "Data relawan berhasil diperbarui."); }} /> : null}
+      {assignmentTarget ? <AssignmentDialog data={data} target={assignmentTarget} onClose={() => setAssignmentTarget(null)} onChanged={async (message) => { await changed(message); }} /> : null}
 
-      {toast ? (
-        <div className="toast" role="status">
-          <span className="toast-check">
-            <Check size={16} />
-          </span>
-          <span>{toast}</span>
-          <button type="button" onClick={() => setToast(null)} aria-label="Tutup">
-            <X size={16} />
-          </button>
-        </div>
-      ) : null}
+      {toast ? <div className="toast" role="status"><span className="toast-check"><Check size={16} /></span><span>{toast}</span><button type="button" onClick={() => setToast(null)} aria-label="Tutup"><X size={16} /></button></div> : null}
     </div>
   );
 }
 
-function LoginScreen({
-  configured,
-  email,
-  setEmail,
-  loginState,
-  loginError,
-  onSubmit,
-  onDemo,
-}: {
-  configured: boolean;
+function ConfigurationRequired() {
+  return (
+    <main className="state-page">
+      <Logo large />
+      <span className="state-icon"><Database size={26} /></span>
+      <h1>Supabase belum terhubung</h1>
+      <p>Tambahkan URL proyek dan publishable key ke <code>.env.local</code>, lalu mulai ulang aplikasi.</p>
+      <pre>NEXT_PUBLIC_SUPABASE_URL=...{"\n"}NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=...</pre>
+    </main>
+  );
+}
+
+function LoadingScreen({ label }: { label: string }) {
+  return <main className="state-page"><Logo large /><LoaderCircle className="spin state-spinner" size={30} /><p>{label}</p></main>;
+}
+
+function DataError({ message, onRetry, onLogout }: { message: string; onRetry: () => void; onLogout: () => void }) {
+  return (
+    <main className="state-page">
+      <Logo large /><span className="state-icon error"><AlertCircle size={26} /></span><h1>Data belum dapat dibuka</h1><p>{message}</p>
+      <div className="state-actions"><button className="button button-primary" type="button" onClick={onRetry}><RefreshCw size={17} /> Coba lagi</button><button className="button button-secondary" type="button" onClick={onLogout}>Keluar</button></div>
+    </main>
+  );
+}
+
+function LoginScreen({ email, setEmail, loginState, loginError, onSubmit }: {
   email: string;
   setEmail: (email: string) => void;
   loginState: "idle" | "sending" | "sent" | "error";
   loginError: string;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-  onDemo: () => void;
 }) {
   return (
     <main className="login-page">
       <section className="login-story">
-        <div className="login-brand">
-          <Logo large />
-          <div>
-            <strong>{APP_CONFIG.name}</strong>
-            <span>{APP_CONFIG.tagline}</span>
-          </div>
-        </div>
+        <div className="login-brand"><Logo large /><div><strong>{APP_CONFIG.name}</strong><span>{APP_CONFIG.tagline}</span></div></div>
         <div className="story-copy">
-          <span className="eyebrow eyebrow-dark">
-            <Sparkles size={16} /> SATU TEMPAT UNTUK TIM PELAYANAN
-          </span>
+          <span className="eyebrow eyebrow-dark"><Sparkles size={16} /> SATU TEMPAT UNTUK TIM PELAYANAN</span>
           <h1>Rencanakan pelayanan tanpa bentrok.</h1>
-          <p>
-            Kelola jadwal, ketidakhadiran, dan komunikasi relawan dengan lebih
-            tenang—supaya tim dapat fokus melayani.
-          </p>
+          <p>Kelola jadwal, ketidakhadiran, dan komunikasi relawan dengan lebih tenang—supaya tim dapat fokus melayani.</p>
           <div className="story-points">
-            <div>
-              <CalendarCheck />
-              <span>
-                <strong>Jadwal yang jelas</strong>
-                Semua pelayanan dalam satu kalender
-              </span>
-            </div>
-            <div>
-              <WandSparkles />
-              <span>
-                <strong>Otomatis, tetap terkendali</strong>
-                Draft dibuat sistem, keputusan tetap pada koordinator
-              </span>
-            </div>
-            <div>
-              <MessageCircle />
-              <span>
-                <strong>Siap terhubung ke LINE</strong>
-                Pengingat dan konfirmasi langsung ke relawan
-              </span>
-            </div>
+            <div><CalendarCheck /><span><strong>Jadwal yang jelas</strong>Semua pelayanan dalam satu kalender</span></div>
+            <div><WandSparkles /><span><strong>Otomatis, tetap terkendali</strong>Draft dibuat sistem, keputusan tetap pada koordinator</span></div>
+            <div><MessageCircle /><span><strong>Siap terhubung ke LINE</strong>Pengingat dan konfirmasi langsung ke relawan</span></div>
           </div>
         </div>
         <p className="story-footer">Dibuat untuk tim yang melayani bersama.</p>
       </section>
-
       <section className="login-panel">
         <div className="login-form-wrap">
-          <span className="mobile-login-logo">
-            <Logo large />
-          </span>
-          <div className="login-heading">
-            <p className="eyebrow">PORTAL KOORDINATOR</p>
-            <h2>Selamat datang kembali</h2>
-            <p>Masuk menggunakan email yang terdaftar sebagai koordinator.</p>
-          </div>
-
+          <span className="mobile-login-logo"><Logo large /></span>
+          <div className="login-heading"><p className="eyebrow">PORTAL IFGF</p><h2>Selamat datang kembali</h2><p>Masuk menggunakan email yang sudah terdaftar.</p></div>
           {loginState === "sent" ? (
-            <div className="login-success" role="status">
-              <span>
-                <Check size={22} />
-              </span>
-              <div>
-                <strong>Periksa email Anda</strong>
-                <p>Tautan masuk telah dikirim ke {email}.</p>
-              </div>
-            </div>
+            <div className="login-success" role="status"><span><Check size={22} /></span><div><strong>Periksa email Anda</strong><p>Tautan masuk telah dikirim ke {email}.</p></div></div>
           ) : (
             <form className="login-form" onSubmit={onSubmit}>
-              <label>
-                Alamat email
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  placeholder="nama@ifgf.org"
-                  autoComplete="email"
-                  required={configured}
-                />
-              </label>
-              {loginState === "error" ? (
-                <p className="form-error" role="alert">
-                  {loginError}
-                </p>
-              ) : null}
-              <button
-                className="button button-primary button-block"
-                type="submit"
-                disabled={!configured || loginState === "sending"}
-              >
-                {loginState === "sending" ? "Mengirim..." : "Kirim tautan masuk"}
-                <ChevronRight size={18} />
-              </button>
+              <label>Alamat email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="nama@ifgf.org" autoComplete="email" required /></label>
+              {loginState === "error" ? <p className="form-error" role="alert">{loginError}</p> : null}
+              <button className="button button-primary button-block" type="submit" disabled={loginState === "sending"}>{loginState === "sending" ? "Mengirim..." : "Kirim tautan masuk"}<ChevronRight size={18} /></button>
             </form>
           )}
-
-          {!configured ? (
-            <div className="demo-entry">
-              <span>Supabase belum dihubungkan</span>
-              <button type="button" className="button button-secondary" onClick={onDemo}>
-                Buka demo koordinator
-              </button>
-            </div>
-          ) : null}
-
-          <p className="login-note">
-            Dengan masuk, Anda menyetujui kebijakan penggunaan data gereja.
-          </p>
+          <p className="login-note">Dengan masuk, Anda menyetujui kebijakan penggunaan data gereja.</p>
         </div>
       </section>
     </main>
   );
 }
 
-function PageHeader({
-  eyebrow,
-  title,
-  description,
-  actions,
-}: {
-  eyebrow?: string;
-  title: string;
-  description: string;
-  actions?: React.ReactNode;
-}) {
-  return (
-    <header className="page-header">
-      <div>
-        {eyebrow ? <p className="eyebrow">{eyebrow}</p> : null}
-        <h1>{title}</h1>
-        <p>{description}</p>
-      </div>
-      {actions ? <div className="page-actions">{actions}</div> : null}
-    </header>
-  );
+function PageHeader({ eyebrow, title, description, actions }: { eyebrow?: string; title: string; description: string; actions?: ReactNode }) {
+  return <header className="page-header"><div>{eyebrow ? <p className="eyebrow">{eyebrow}</p> : null}<h1>{title}</h1><p>{description}</p></div>{actions ? <div className="page-actions">{actions}</div> : null}</header>;
 }
 
-function Overview({
-  onNavigate,
-  onAddEvent,
-  showToast,
-}: {
-  onNavigate: (view: View) => void;
-  onAddEvent: () => void;
-  showToast: (message: string) => void;
-}) {
+function requirementsFor(data: PlannerData, occurrence: EventOccurrence) {
+  return data.requirements.filter((requirement) => requirement.event_group_id === occurrence.event_group_id);
+}
+
+function assignmentsFor(data: PlannerData, occurrenceId: string, sectionId?: string) {
+  return data.assignments.filter((assignment) => assignment.occurrence_id === occurrenceId && (!sectionId || assignment.section_id === sectionId));
+}
+
+function coverageFor(data: PlannerData, occurrence: EventOccurrence) {
+  const needed = requirementsFor(data, occurrence).reduce((total, requirement) => total + requirement.needed_count, 0);
+  const assigned = assignmentsFor(data, occurrence.id).length;
+  return { needed, assigned, missing: Math.max(0, needed - assigned) };
+}
+
+function countUnfilled(data: PlannerData, occurrences: EventOccurrence[]) {
+  return occurrences.reduce((total, occurrence) => total + coverageFor(data, occurrence).missing, 0);
+}
+
+function Overview({ data, canManage, onNavigate, onAddEvent }: { data: PlannerData; canManage: boolean; onNavigate: (view: View) => void; onAddEvent: () => void }) {
+  const now = new Date();
+  const weekEnd = new Date(now); weekEnd.setDate(now.getDate() + 7);
+  const upcoming = data.occurrences.filter((occurrence) => new Date(occurrence.starts_at) >= now);
+  const thisWeek = upcoming.filter((occurrence) => new Date(occurrence.starts_at) <= weekEnd);
+  const activeVolunteers = data.volunteers.filter((volunteer) => volunteer.status === "active");
+  const scheduledVolunteerIds = new Set(data.assignments.filter((assignment) => thisWeek.some((occurrence) => occurrence.id === assignment.occurrence_id)).map((assignment) => assignment.volunteer_id));
+  const unfilled = countUnfilled(data, upcoming.slice(0, 8));
+  const recentAbsences = data.unavailability.filter((absence) => now.getTime() - new Date(absence.created_at).getTime() < 86_400_000 * 2);
+  const firstName = data.profile.full_name.split(" ")[0];
+  const dateLabel = new Intl.DateTimeFormat("id-ID", { timeZone: data.organization.timezone, weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(now).toUpperCase();
+
   return (
     <>
-      <PageHeader
-        eyebrow="SABTU, 1 AGUSTUS 2026"
-        title="Selamat siang, Hanssen"
-        description="Berikut keadaan tim pelayanan Anda minggu ini."
-        actions={
-          <>
-            <button className="button button-secondary" type="button" onClick={onAddEvent}>
-              <Plus size={18} /> Tambah kegiatan
-            </button>
-            <button
-              className="button button-primary"
-              type="button"
-              onClick={() => {
-                onNavigate("schedule");
-                showToast("Draft jadwal Agustus siap diperiksa.");
-              }}
-            >
-              <WandSparkles size={18} /> Buat jadwal
-            </button>
-          </>
-        }
-      />
-
-      <section className="metric-grid" aria-label="Ringkasan minggu ini">
-        <MetricCard
-          icon={CalendarCheck}
-          label="Kegiatan minggu ini"
-          value="4"
-          detail="3 jenis kegiatan"
-          tone="blue"
-        />
-        <MetricCard
-          icon={UserCheck}
-          label="Relawan terjadwal"
-          value="18"
-          detail="dari 24 relawan aktif"
-          tone="teal"
-        />
-        <MetricCard
-          icon={AlertCircle}
-          label="Posisi belum terisi"
-          value="2"
-          detail="Perlu tindakan"
-          tone="amber"
-          action={() => onNavigate("schedule")}
-        />
-        <MetricCard
-          icon={Clock3}
-          label="Ketidakhadiran baru"
-          value="3"
-          detail="Sejak kemarin"
-          tone="violet"
-          action={() => onNavigate("unavailability")}
-        />
+      <PageHeader eyebrow={dateLabel} title={`Selamat datang, ${firstName}`} description="Berikut keadaan nyata tim pelayanan Anda saat ini." actions={canManage ? <><button className="button button-secondary" type="button" onClick={onAddEvent}><Plus size={18} /> Tambah kegiatan</button><button className="button button-primary" type="button" onClick={() => onNavigate("schedule")}><CalendarDays size={18} /> Buka jadwal</button></> : undefined} />
+      <section className="metric-grid" aria-label="Ringkasan pelayanan">
+        <MetricCard icon={CalendarCheck} label="Kegiatan minggu ini" value={String(thisWeek.length)} detail={`${data.events.length} kelompok kegiatan`} tone="blue" />
+        <MetricCard icon={UserCheck} label="Relawan terjadwal" value={String(scheduledVolunteerIds.size)} detail={`dari ${activeVolunteers.length} relawan aktif`} tone="teal" />
+        <MetricCard icon={AlertCircle} label="Posisi belum terisi" value={String(unfilled)} detail={unfilled ? "Perlu tindakan" : "Semua posisi terisi"} tone="amber" action={() => onNavigate("schedule")} />
+        <MetricCard icon={Clock3} label="Ketidakhadiran baru" value={String(recentAbsences.length)} detail={`${data.unavailability.length} laporan tersimpan`} tone="violet" action={() => onNavigate("unavailability")} />
       </section>
 
       <section className="dashboard-grid">
         <div className="card upcoming-card">
-          <div className="card-heading">
-            <div>
-              <h2>Jadwal terdekat</h2>
-              <p>Pelayanan dalam 14 hari ke depan</p>
-            </div>
-            <button className="text-button" type="button" onClick={() => onNavigate("schedule")}>
-              Lihat semua <ChevronRight size={16} />
-            </button>
-          </div>
-          <div className="upcoming-list">
-            <UpcomingItem
-              date="02"
-              month="AGU"
-              day="Besok"
-              title="Sunday Service"
-              time="09.00–11.30"
-              coverage="12/12 posisi terisi"
-              status="ready"
-              people={["AT", "BS", "CL", "DW"]}
-            />
-            <UpcomingItem
-              date="05"
-              month="AGU"
-              day="Rabu"
-              title="Komsel Rabu"
-              time="19.00–21.00"
-              coverage="4/4 posisi terisi"
-              status="ready"
-              people={["EH", "DW", "GH"]}
-            />
-            <UpcomingItem
-              date="09"
-              month="AGU"
-              day="Minggu"
-              title="Sunday Service"
-              time="09.00–11.30"
-              coverage="10/12 posisi terisi"
-              status="attention"
-              people={["AT", "BS", "GH"]}
-            />
-          </div>
+          <div className="card-heading"><div><h2>Jadwal terdekat</h2><p>Pelayanan dalam waktu dekat</p></div><button className="text-button" type="button" onClick={() => onNavigate("schedule")}>Lihat semua <ChevronRight size={16} /></button></div>
+          {upcoming.length ? <div className="upcoming-list">{upcoming.slice(0, 3).map((occurrence) => <UpcomingItem key={occurrence.id} data={data} occurrence={occurrence} />)}</div> : <EmptyState icon={CalendarDays} title="Belum ada jadwal" description="Tambahkan kegiatan untuk membuat tanggal pelayanan pertama." action={canManage ? <button className="button button-primary" type="button" onClick={onAddEvent}><Plus size={17} /> Tambah kegiatan</button> : undefined} />}
         </div>
-
         <div className="card attention-card">
-          <div className="card-heading">
-            <div>
-              <h2>Perlu perhatian</h2>
-              <p>Selesaikan sebelum jadwal diterbitkan</p>
-            </div>
-            <span className="count-badge">3</span>
-          </div>
-          <div className="attention-list">
-            <button type="button" onClick={() => onNavigate("schedule")}>
-              <span className="attention-icon amber"><Users size={18} /></span>
-              <span>
-                <strong>2 posisi belum terisi</strong>
-                <small>Sunday Service • 9 Agustus</small>
-              </span>
-              <ChevronRight size={18} />
-            </button>
-            <button type="button" onClick={() => onNavigate("unavailability")}>
-              <span className="attention-icon violet"><Clock3 size={18} /></span>
-              <span>
-                <strong>3 ketidakhadiran baru</strong>
-                <small>Berpotensi memengaruhi 2 jadwal</small>
-              </span>
-              <ChevronRight size={18} />
-            </button>
-            <button type="button" onClick={() => onNavigate("notifications")}>
-              <span className="attention-icon blue"><Bell size={18} /></span>
-              <span>
-                <strong>5 konfirmasi tertunda</strong>
-                <small>Pengingat terakhir 2 hari lalu</small>
-              </span>
-              <ChevronRight size={18} />
-            </button>
-          </div>
+          <div className="card-heading"><div><h2>Perlu perhatian</h2><p>Tindakan berdasarkan data saat ini</p></div><span className="count-badge">{Number(unfilled > 0) + Number(recentAbsences.length > 0)}</span></div>
+          {unfilled || recentAbsences.length ? <div className="attention-list">{unfilled ? <button type="button" onClick={() => onNavigate("schedule")}><span className="attention-icon amber"><Users size={18} /></span><span><strong>{unfilled} posisi belum terisi</strong><small>Pada jadwal mendatang</small></span><ChevronRight size={18} /></button> : null}{recentAbsences.length ? <button type="button" onClick={() => onNavigate("unavailability")}><span className="attention-icon violet"><Clock3 size={18} /></span><span><strong>{recentAbsences.length} ketidakhadiran baru</strong><small>Periksa dampak terhadap jadwal</small></span><ChevronRight size={18} /></button> : null}</div> : <EmptyState icon={Check} title="Tidak ada masalah terbuka" description="Data jadwal saat ini tidak memerlukan tindakan." />}
         </div>
       </section>
 
-      <section className="card quick-card">
-        <div className="quick-copy">
-          <span className="quick-icon"><Sparkles size={20} /></span>
-          <div>
-            <h2>Siap menyiapkan jadwal bulan September?</h2>
-            <p>12 relawan sudah memperbarui ketersediaan mereka.</p>
-          </div>
-        </div>
-        <button className="button button-dark" type="button" onClick={() => onNavigate("schedule")}>
-          Mulai dari ketersediaan <ChevronRight size={17} />
-        </button>
-      </section>
+      {canManage && data.sections.length === 0 ? <section className="card quick-card"><div className="quick-copy"><span className="quick-icon"><Sparkles size={20} /></span><div><h2>Mulai dengan bagian pelayanan</h2><p>Buat bagian seperti Worship, Usher, Multimedia, atau Kids.</p></div></div><button className="button button-dark" type="button" onClick={() => onNavigate("settings")}>Atur bagian <ChevronRight size={17} /></button></section> : null}
     </>
   );
 }
 
-function MetricCard({
-  icon: Icon,
-  label,
-  value,
-  detail,
-  tone,
-  action,
-}: {
-  icon: LucideIcon;
-  label: string;
-  value: string;
-  detail: string;
-  tone: string;
-  action?: () => void;
-}) {
-  return (
-    <article className="metric-card">
-      <span className={`metric-icon ${tone}`}><Icon size={21} /></span>
-      <div className="metric-copy">
-        <p>{label}</p>
-        <strong>{value}</strong>
-        {action ? (
-          <button type="button" onClick={action}>{detail} <ChevronRight size={14} /></button>
-        ) : (
-          <span>{detail}</span>
-        )}
-      </div>
-    </article>
-  );
+function MetricCard({ icon: Icon, label, value, detail, tone, action }: { icon: LucideIcon; label: string; value: string; detail: string; tone: string; action?: () => void }) {
+  return <article className="metric-card"><span className={`metric-icon ${tone}`}><Icon size={21} /></span><div className="metric-copy"><p>{label}</p><strong>{value}</strong>{action ? <button type="button" onClick={action}>{detail} <ChevronRight size={14} /></button> : <span>{detail}</span>}</div></article>;
 }
 
-function UpcomingItem({
-  date,
-  month,
-  day,
-  title,
-  time,
-  coverage,
-  status,
-  people,
-}: {
-  date: string;
-  month: string;
-  day: string;
-  title: string;
-  time: string;
-  coverage: string;
-  status: "ready" | "attention";
-  people: string[];
-}) {
-  return (
-    <article className="upcoming-item">
-      <div className="date-block"><strong>{date}</strong><span>{month}</span></div>
-      <div className="upcoming-copy">
-        <span className="day-label">{day}</span>
-        <h3>{title}</h3>
-        <p><Clock3 size={14} /> {time}</p>
-      </div>
-      <div className="avatar-stack" aria-label={`${people.length} relawan ditampilkan`}>
-        {people.map((person, index) => <Avatar key={person} initials={person} tone={index} />)}
-        <span className="avatar avatar-more">+{Math.max(0, 12 - people.length)}</span>
-      </div>
-      <StatusPill tone={status === "ready" ? "ready" : "attention"}>{coverage}</StatusPill>
-      <button className="icon-button" type="button" aria-label={`Buka ${title}`}><ChevronRight size={18} /></button>
-    </article>
-  );
+function UpcomingItem({ data, occurrence }: { data: PlannerData; occurrence: EventOccurrence }) {
+  const event = data.events.find((item) => item.id === occurrence.event_group_id);
+  const coverage = coverageFor(data, occurrence);
+  const assignedNames = assignmentsFor(data, occurrence.id).map((assignment) => data.volunteers.find((volunteer) => volunteer.id === assignment.volunteer_id)?.full_name).filter((name): name is string => Boolean(name));
+  const date = new Date(occurrence.starts_at);
+  const day = new Intl.DateTimeFormat("id-ID", { timeZone: data.organization.timezone, day: "2-digit" }).format(date);
+  const month = new Intl.DateTimeFormat("id-ID", { timeZone: data.organization.timezone, month: "short" }).format(date).toUpperCase();
+  return <article className="upcoming-item"><div className="date-block"><strong>{day}</strong><span>{month}</span></div><div className="upcoming-copy"><span className="day-label">{formatShortDate(occurrence.starts_at, data.organization.timezone).split(",")[0]}</span><h3>{event?.name ?? "Kegiatan"}</h3><p><Clock3 size={14} /> {formatTime(occurrence.starts_at, data.organization.timezone)}–{formatTime(occurrence.ends_at, data.organization.timezone)}</p></div><div className="avatar-stack" aria-label={`${assignedNames.length} relawan ditampilkan`}>{assignedNames.slice(0, 4).map((name, index) => <Avatar key={name} name={name} tone={index} />)}{assignedNames.length > 4 ? <span className="avatar avatar-more">+{assignedNames.length - 4}</span> : null}</div><StatusPill tone={coverage.missing ? "attention" : "ready"}>{coverage.assigned}/{coverage.needed} terisi</StatusPill><ChevronRight size={18} /></article>;
 }
 
-function Schedule({ showToast }: { showToast: (message: string) => void }) {
-  const [published, setPublished] = useState(false);
+function Schedule({ data, canManage, onAssign, onChanged, showToast }: { data: PlannerData; canManage: boolean; onAssign: (target: { occurrence: EventOccurrence; section: ServiceSection }) => void; onChanged: (message: string) => Promise<void>; showToast: (message: string) => void }) {
+  const [publishing, setPublishing] = useState(false);
+  const upcoming = data.occurrences.filter((occurrence) => new Date(occurrence.starts_at) >= new Date()).slice(0, 6);
+  const sectionIds = new Set(upcoming.flatMap((occurrence) => requirementsFor(data, occurrence).map((requirement) => requirement.section_id)));
+  const sections = data.sections.filter((section) => sectionIds.has(section.id));
+  const published = data.scheduleVersions.some((version) => version.status === "published");
+
+  async function handlePublish() {
+    setPublishing(true);
+    try {
+      await publishSchedule({ organizationId: data.organization.id, userId: data.user.id, occurrences: upcoming });
+      await onChanged("Jadwal berhasil diterbitkan.");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Jadwal tidak dapat diterbitkan.");
+    } finally {
+      setPublishing(false);
+    }
+  }
+
   return (
     <>
-      <PageHeader
-        eyebrow="AGUSTUS 2026"
-        title="Jadwal pelayanan"
-        description="Periksa kebutuhan, isi kekosongan, lalu terbitkan untuk relawan."
-        actions={
-          <>
-            <button className="button button-secondary" type="button" onClick={() => showToast("Tautan jadwal disalin.")}>
-              <Copy size={17} /> Salin tautan
-            </button>
-            <button className="button button-primary" type="button" onClick={() => {
-              setPublished(true);
-              showToast("Jadwal diterbitkan. Notifikasi siap dikirim.");
-            }}>
-              <Bell size={17} /> {published ? "Sudah diterbitkan" : "Terbitkan jadwal"}
-            </button>
-          </>
-        }
-      />
-      <div className="schedule-toolbar card">
-        <div className="segmented-control" role="group" aria-label="Tampilan jadwal">
-          <button className="active" type="button">Bulan</button>
-          <button type="button">Agenda</button>
-        </div>
-        <label>
-          <span className="sr-only">Pilih kegiatan</span>
-          <select defaultValue="all"><option value="all">Semua kegiatan</option><option>Sunday Service</option><option>Doa Sabtu</option></select>
-        </label>
-        <span className="schedule-draft"><span /> Draft dibuat 12 menit lalu</span>
-        <button className="button button-secondary regenerate" type="button" onClick={() => showToast("Draft dijadwalkan ulang dengan aturan terbaru.")}>
-          <RefreshCw size={16} /> Buat ulang draft
-        </button>
-      </div>
-
+      <PageHeader title="Jadwal pelayanan" description="Isi posisi berdasarkan kualifikasi dan ketersediaan relawan." actions={<>{<button className="button button-secondary" type="button" onClick={() => { void navigator.clipboard?.writeText(window.location.href); showToast("Tautan jadwal disalin."); }}><Copy size={17} /> Salin tautan</button>}{canManage ? <button className="button button-primary" type="button" disabled={publishing || !upcoming.length} onClick={handlePublish}><Bell size={17} /> {publishing ? "Menerbitkan..." : published ? "Terbitkan ulang" : "Terbitkan jadwal"}</button> : null}</>} />
+      <div className="schedule-toolbar card"><div className="segmented-control" role="group" aria-label="Tampilan jadwal"><button className="active" type="button">Agenda</button></div><span className="schedule-draft"><span /> Data langsung dari Supabase</span><button className="button button-secondary regenerate" type="button" onClick={() => window.location.reload()}><RefreshCw size={16} /> Muat ulang</button></div>
       <section className="card schedule-board" aria-label="Papan jadwal pelayanan">
-        <div className="schedule-table-wrap">
-          <table className="schedule-table">
-            <thead>
-              <tr>
-                <th>Bagian pelayanan</th>
-                {SCHEDULE_COLUMNS.map((column) => <th key={column.day}><strong>{column.day}</strong><span>{column.event}</span></th>)}
-              </tr>
-            </thead>
-            <tbody>
-              {SCHEDULE_ROWS.map((row) => (
-                <tr key={row.section}>
-                  <th><strong>{row.section}</strong><span>{row.count} dibutuhkan</span></th>
-                  {row.cells.map((cell, index) => (
-                    <td key={`${row.section}-${index}`}>
-                      {cell.map((person) => (
-                        <button key={person} type="button" className={person === "Perlu relawan" ? "assignment missing" : person === "—" ? "assignment empty" : "assignment"}>
-                          {person === "Perlu relawan" ? <Plus size={14} /> : null}{person}
-                        </button>
-                      ))}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="mobile-agenda">
-          {SCHEDULE_COLUMNS.map((column, columnIndex) => (
-            <article key={column.day}>
-              <header><div><strong>{column.day}</strong><span>{column.event}</span></div>{columnIndex === 1 ? <StatusPill tone="attention">2 kosong</StatusPill> : <StatusPill tone="ready">Siap</StatusPill>}</header>
-              {SCHEDULE_ROWS.map((row) => (
-                <div className="mobile-assignment" key={row.section}>
-                  <span>{row.section}</span>
-                  <div>{row.cells[columnIndex].map((person) => <button type="button" key={person} className={person === "Perlu relawan" ? "assignment missing" : "assignment"}>{person}</button>)}</div>
-                </div>
-              ))}
-            </article>
-          ))}
-        </div>
+        {!upcoming.length ? <EmptyState icon={CalendarDays} title="Belum ada tanggal kegiatan" description="Tanggal mendatang akan muncul setelah koordinator menambahkan kegiatan." /> : !sections.length ? <EmptyState icon={Users} title="Belum ada kebutuhan tim" description="Tambahkan bagian pelayanan, lalu buat kegiatan dengan kebutuhan relawan." /> : <>
+          <div className="schedule-table-wrap"><table className="schedule-table"><thead><tr><th>Bagian pelayanan</th>{upcoming.map((occurrence) => <th key={occurrence.id}><strong>{formatShortDate(occurrence.starts_at, data.organization.timezone)}</strong><span>{data.events.find((event) => event.id === occurrence.event_group_id)?.name}</span></th>)}</tr></thead><tbody>{sections.map((section) => <tr key={section.id}><th><strong>{section.name}</strong></th>{upcoming.map((occurrence) => <ScheduleCell key={occurrence.id} data={data} occurrence={occurrence} section={section} canManage={canManage} onOpen={() => onAssign({ occurrence, section })} />)}</tr>)}</tbody></table></div>
+          <div className="mobile-agenda">{upcoming.map((occurrence) => { const coverage = coverageFor(data, occurrence); return <article key={occurrence.id}><header><div><strong>{formatShortDate(occurrence.starts_at, data.organization.timezone)}</strong><span>{data.events.find((event) => event.id === occurrence.event_group_id)?.name}</span></div><StatusPill tone={coverage.missing ? "attention" : "ready"}>{coverage.missing ? `${coverage.missing} kosong` : "Siap"}</StatusPill></header>{sections.map((section) => <div className="mobile-assignment" key={section.id}><span>{section.name}</span><ScheduleCell mobile data={data} occurrence={occurrence} section={section} canManage={canManage} onOpen={() => onAssign({ occurrence, section })} /></div>)}</article>; })}</div>
+        </>}
       </section>
     </>
   );
 }
 
-function Events({ events, onAdd }: { events: EventGroup[]; onAdd: () => void }) {
-  return (
-    <>
-      <PageHeader
-        title="Kegiatan"
-        description="Atur hari, pola mingguan, dan kebutuhan pelayanan setiap kegiatan."
-        actions={<button className="button button-primary" type="button" onClick={onAdd}><Plus size={18} /> Tambah kegiatan</button>}
-      />
-      <section className="event-grid">
-        {events.map((event) => (
-          <article className="card event-card" key={event.id}>
-            <div className={`event-mark ${event.tone}`}><CalendarCheck size={22} /></div>
-            <div className="event-title"><div><h2>{event.name}</h2><p>{event.cadence}</p></div><button className="icon-button" type="button" aria-label={`Menu ${event.name}`}><ChevronDown size={18} /></button></div>
-            <div className="event-meta"><span>Berikutnya</span><strong>{event.nextDate}</strong></div>
-            <div className="event-footer"><span><Users size={16} /> {event.sections} bagian</span><button className="text-button" type="button">Kelola <ChevronRight size={15} /></button></div>
-          </article>
-        ))}
-        <button className="add-event-card" type="button" onClick={onAdd}><span><Plus size={22} /></span><strong>Tambah kegiatan baru</strong><small>Atur jadwal berulang dan kebutuhan tim</small></button>
-      </section>
-      <section className="card recurrence-note"><span><CalendarDays size={22} /></span><div><h2>Pola kegiatan yang fleksibel</h2><p>Dukung setiap minggu, minggu ke-1 & 3, kecuali minggu ke-5, atau pilihan khusus—dengan pratinjau tanggal sebelum disimpan.</p></div></section>
-    </>
-  );
+function ScheduleCell({ data, occurrence, section, canManage, onOpen, mobile = false }: { data: PlannerData; occurrence: EventOccurrence; section: ServiceSection; canManage: boolean; onOpen: () => void; mobile?: boolean }) {
+  const requirement = requirementsFor(data, occurrence).find((item) => item.section_id === section.id);
+  const assignments = assignmentsFor(data, occurrence.id, section.id);
+  const content = !requirement ? <span className="assignment empty">—</span> : <>{assignments.map((assignment) => { const volunteer = data.volunteers.find((item) => item.id === assignment.volunteer_id); return <button key={assignment.id} type="button" className="assignment" onClick={canManage ? onOpen : undefined}>{volunteer?.full_name ?? "Relawan"}</button>; })}{Array.from({ length: Math.max(0, requirement.needed_count - assignments.length) }, (_, index) => <button key={`missing-${index}`} type="button" className="assignment missing" disabled={!canManage} onClick={onOpen}><Plus size={14} /> Perlu relawan</button>)}</>;
+  return mobile ? <div>{content}</div> : <td>{content}</td>;
 }
 
-function Volunteers() {
+function Events({ data, onAdd }: { data: PlannerData; onAdd: () => void }) {
+  return <><PageHeader title="Kegiatan" description="Atur hari, pola mingguan, dan kebutuhan pelayanan setiap kegiatan." actions={<button className="button button-primary" type="button" onClick={onAdd}><Plus size={18} /> Tambah kegiatan</button>} /><section className="event-grid">{data.events.map((event, index) => { const next = data.occurrences.find((occurrence) => occurrence.event_group_id === event.id && new Date(occurrence.starts_at) >= new Date()); const sections = data.requirements.filter((requirement) => requirement.event_group_id === event.id).length; return <article className="card event-card" key={event.id}><div className={`event-mark ${["blue", "violet", "teal", "amber"][index % 4]}`}><CalendarCheck size={22} /></div><div className="event-title"><div><h2>{event.name}</h2><p>{recurrenceLabel(event)}</p></div><button className="icon-button" type="button" aria-label={`Menu ${event.name}`}><ChevronDown size={18} /></button></div><div className="event-meta"><span>Berikutnya</span><strong>{next ? formatDate(next.starts_at, data.organization.timezone) : "Belum ada tanggal"}</strong></div><div className="event-footer"><span><Users size={16} /> {sections} bagian</span></div></article>; })}<button className="add-event-card" type="button" onClick={onAdd}><span><Plus size={22} /></span><strong>Tambah kegiatan baru</strong><small>Atur jadwal berulang dan kebutuhan tim</small></button></section>{!data.events.length ? <section className="card recurrence-note"><span><CalendarDays size={22} /></span><div><h2>Belum ada kegiatan</h2><p>Buat kegiatan pertama; tanggal pelayanan berikutnya akan dihasilkan dan disimpan otomatis.</p></div></section> : null}</>;
+}
+
+function Volunteers({ data, onAdd, onEdit }: { data: PlannerData; onAdd: () => void; onEdit: (volunteer: Volunteer) => void }) {
   const [query, setQuery] = useState("");
-  const filtered = useMemo(() => VOLUNTEERS.filter((volunteer) => `${volunteer.name} ${volunteer.sections.join(" ")}`.toLowerCase().includes(query.toLowerCase())), [query]);
-  return (
-    <>
-      <PageHeader
-        title="Relawan"
-        description="Kelola siapa dapat melayani pada setiap bagian dan kegiatan."
-        actions={<button className="button button-primary" type="button"><Plus size={18} /> Tambah relawan</button>}
-      />
-      <section className="card people-card">
-        <div className="people-toolbar">
-          <label className="inline-search"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Cari nama atau bagian..." /></label>
-          <select aria-label="Filter status"><option>Semua status</option><option>Aktif</option><option>Istirahat</option></select>
-          <span>{filtered.length} relawan</span>
-        </div>
-        <div className="people-table-wrap">
-          <table className="people-table">
-            <thead><tr><th>Relawan</th><th>Bagian yang dikuasai</th><th>Kegiatan</th><th>Pelayanan bulan ini</th><th>Status</th><th /></tr></thead>
-            <tbody>{filtered.map((volunteer, index) => <tr key={volunteer.name}><td><Avatar initials={volunteer.initials} tone={index} /><strong>{volunteer.name}</strong></td><td><div className="chip-row">{volunteer.sections.map((section) => <span key={section}>{section}</span>)}</div></td><td>{volunteer.events}</td><td><span className="serve-count">{volunteer.served}×</span></td><td><StatusPill tone={volunteer.status === "Aktif" ? "ready" : "neutral"}>{volunteer.status}</StatusPill></td><td><button type="button" className="icon-button" aria-label={`Buka ${volunteer.name}`}><ChevronRight size={17} /></button></td></tr>)}</tbody>
-          </table>
-        </div>
-        <div className="people-mobile">
-          {filtered.map((volunteer, index) => <article key={volunteer.name}><Avatar initials={volunteer.initials} tone={index} /><div><strong>{volunteer.name}</strong><p>{volunteer.events}</p><div className="chip-row">{volunteer.sections.map((section) => <span key={section}>{section}</span>)}</div></div><ChevronRight size={18} /></article>)}
-        </div>
-      </section>
-    </>
-  );
+  const filtered = useMemo(() => data.volunteers.filter((volunteer) => { const sectionNames = data.eligibilities.filter((item) => item.volunteer_id === volunteer.id).map((item) => data.sections.find((section) => section.id === item.section_id)?.name).join(" "); return `${volunteer.full_name} ${sectionNames}`.toLowerCase().includes(query.toLowerCase()); }), [data, query]);
+  return <><PageHeader title="Relawan" description="Kelola bagian dan kegiatan yang dapat dilayani setiap orang." actions={<button className="button button-primary" type="button" onClick={onAdd}><Plus size={18} /> Tambah relawan</button>} /><section className="card people-card"><div className="people-toolbar"><label className="inline-search"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Cari nama atau bagian..." /></label><span>{filtered.length} relawan</span></div>{filtered.length ? <><div className="people-table-wrap"><table className="people-table"><thead><tr><th>Relawan</th><th>Bagian yang dikuasai</th><th>Kegiatan</th><th>Status</th><th /></tr></thead><tbody>{filtered.map((volunteer, index) => { const sections = data.eligibilities.filter((item) => item.volunteer_id === volunteer.id).map((item) => data.sections.find((section) => section.id === item.section_id)?.name).filter(Boolean); const events = data.eventGroupVolunteers.filter((item) => item.volunteer_id === volunteer.id).map((item) => data.events.find((event) => event.id === item.event_group_id)?.name).filter(Boolean); return <tr key={volunteer.id}><td><Avatar name={volunteer.full_name} tone={index} /><strong>{volunteer.full_name}</strong></td><td><div className="chip-row">{sections.length ? sections.map((section) => <span key={section}>{section}</span>) : <small>Belum ditetapkan</small>}</div></td><td>{events.join(", ") || "Belum ditetapkan"}</td><td><StatusPill tone={volunteer.status === "active" ? "ready" : "neutral"}>{volunteer.status === "active" ? "Aktif" : volunteer.status === "resting" ? "Istirahat" : "Nonaktif"}</StatusPill></td><td><button type="button" className="icon-button" aria-label={`Kelola ${volunteer.full_name}`} onClick={() => onEdit(volunteer)}><ChevronRight size={17} /></button></td></tr>; })}</tbody></table></div><div className="people-mobile">{filtered.map((volunteer, index) => <button type="button" className="people-mobile-button" key={volunteer.id} onClick={() => onEdit(volunteer)}><Avatar name={volunteer.full_name} tone={index} /><div><strong>{volunteer.full_name}</strong><p>{volunteer.email || "Tanpa email"}</p></div><ChevronRight size={18} /></button>)}</div></> : <EmptyState icon={Users} title="Belum ada relawan" description="Tambahkan relawan pertama dan tetapkan bagian yang dapat dilayani." action={<button className="button button-primary" type="button" onClick={onAdd}><Plus size={17} /> Tambah relawan</button>} />}</section></>;
 }
 
-function Unavailability({ showToast }: { showToast: (message: string) => void }) {
-  const [selectedDates, setSelectedDates] = useState<string[]>(["09"]);
-  const toggleDate = (date: string) => setSelectedDates((current) => current.includes(date) ? current.filter((value) => value !== date) : [...current, date]);
-  return (
-    <>
-      <PageHeader title="Ketidakhadiran" description="Relawan melaporkan tanggal ketika mereka tidak dapat melayani." actions={<button className="button button-secondary" type="button"><Copy size={17} /> Salin tautan relawan</button>} />
-      <section className="absence-grid">
-        <div className="card absence-form-card">
-          <div className="portal-label"><span><UserRound size={17} /></span> TAMPILAN RELAWAN</div>
-          <h2>Kapan Anda tidak dapat melayani?</h2>
-          <p>Pilih satu atau beberapa tanggal kegiatan yang akan datang.</p>
-          <div className="date-picker-row">
-            {ABSENCE_DATES.map((item) => <button key={item.date} type="button" className={selectedDates.includes(item.date) ? "selected" : ""} onClick={() => toggleDate(item.date)} aria-pressed={selectedDates.includes(item.date)}><span>{item.day}</span><strong>{item.date}</strong><small>{item.month}</small>{selectedDates.includes(item.date) ? <i><Check size={11} /></i> : null}</button>)}
-          </div>
-          <label className="reason-field">Catatan untuk koordinator <span>(opsional)</span><textarea placeholder="Contoh: Sedang berada di luar kota" /></label>
-          <button className="button button-primary button-block" type="button" disabled={selectedDates.length === 0} onClick={() => showToast(`${selectedDates.length} tanggal ketidakhadiran berhasil dicatat.`)}><Check size={17} /> Laporkan tidak tersedia</button>
-          <p className="privacy-note"><ShieldCheck size={15} /> Catatan hanya dapat dilihat oleh koordinator.</p>
-        </div>
-
-        <div className="card absence-list-card">
-          <div className="card-heading"><div><h2>Laporan terbaru</h2><p>Ketidakhadiran langsung memblokir penjadwalan.</p></div><StatusPill tone="attention">3 baru</StatusPill></div>
-          <div className="absence-list">
-            <AbsenceItem initials="BS" name="Budi Santoso" date="9 Agustus 2026" reason="Acara keluarga" impact="Sudah terjadwal • perlu pengganti" tone={1} urgent />
-            <AbsenceItem initials="CL" name="Christina Lim" date="15 Agustus 2026" reason="Di luar kota" impact="Belum ada bentrok jadwal" tone={2} />
-            <AbsenceItem initials="EH" name="Evelyn Hartono" date="19 Agustus 2026" reason="—" impact="Belum ada bentrok jadwal" tone={4} />
-          </div>
-        </div>
-      </section>
-    </>
-  );
+function Unavailability({ data, onChanged, showToast }: { data: PlannerData; onChanged: (message: string) => Promise<void>; showToast: (message: string) => void }) {
+  const [selected, setSelected] = useState<string[]>([]);
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  const upcoming = data.occurrences.filter((occurrence) => new Date(occurrence.starts_at) >= new Date()).slice(0, 12);
+  const existing = new Set(data.unavailability.filter((absence) => absence.volunteer_id === data.currentVolunteer?.id).map((absence) => absence.occurrence_id));
+  async function save() {
+    if (!data.currentVolunteer) return;
+    setSaving(true);
+    try {
+      await submitUnavailability({ organizationId: data.organization.id, volunteerId: data.currentVolunteer.id, occurrences: upcoming.filter((occurrence) => selected.includes(occurrence.id)), reason });
+      setSelected([]); setReason("");
+      await onChanged("Ketidakhadiran berhasil disimpan.");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Ketidakhadiran tidak dapat disimpan.");
+    } finally { setSaving(false); }
+  }
+  return <><PageHeader title="Ketidakhadiran" description="Laporkan tanggal ketika Anda tidak dapat melayani." actions={<button className="button button-secondary" type="button" onClick={() => { void navigator.clipboard?.writeText(window.location.href); showToast("Tautan portal relawan disalin."); }}><Copy size={17} /> Salin tautan</button>} /><section className="absence-grid"><div className="card absence-form-card"><div className="portal-label"><span><UserRound size={17} /></span> TAMPILAN RELAWAN</div><h2>Kapan Anda tidak dapat melayani?</h2><p>Pilih satu atau beberapa kegiatan yang akan datang.</p>{!data.currentVolunteer ? <div className="inline-alert"><AlertCircle size={18} /><span>Akun ini belum ditautkan ke profil relawan.</span></div> : !upcoming.length ? <EmptyState icon={CalendarDays} title="Belum ada tanggal" description="Koordinator belum membuat kegiatan mendatang." /> : <><div className="date-picker-row">{upcoming.map((occurrence) => { const date = new Date(occurrence.starts_at); const isExisting = existing.has(occurrence.id); const isSelected = selected.includes(occurrence.id); const eventName = data.events.find((event) => event.id === occurrence.event_group_id)?.name; return <button key={occurrence.id} type="button" disabled={isExisting} className={isSelected || isExisting ? "selected" : ""} onClick={() => setSelected((current) => current.includes(occurrence.id) ? current.filter((id) => id !== occurrence.id) : [...current, occurrence.id])} aria-pressed={isSelected || isExisting} title={eventName}><span>{new Intl.DateTimeFormat("id-ID", { timeZone: data.organization.timezone, weekday: "short" }).format(date)}</span><strong>{new Intl.DateTimeFormat("id-ID", { timeZone: data.organization.timezone, day: "2-digit" }).format(date)}</strong><small>{new Intl.DateTimeFormat("id-ID", { timeZone: data.organization.timezone, month: "short" }).format(date)}</small><em>{isExisting ? "Tercatat" : eventName}</em>{isSelected || isExisting ? <i><Check size={11} /></i> : null}</button>; })}</div><label className="reason-field">Catatan untuk koordinator <span>(opsional)</span><textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} placeholder="Contoh: Sedang berada di luar kota" /></label><button className="button button-primary button-block" type="button" disabled={!selected.length || saving} onClick={save}><Check size={17} /> {saving ? "Menyimpan..." : "Laporkan tidak tersedia"}</button></>}<p className="privacy-note"><ShieldCheck size={15} /> Catatan hanya dapat dilihat oleh koordinator.</p></div><div className="card absence-list-card"><div className="card-heading"><div><h2>Laporan terbaru</h2><p>Data ketidakhadiran yang tersimpan.</p></div><StatusPill tone="attention">{data.unavailability.length}</StatusPill></div>{data.unavailability.length ? <div className="absence-list">{data.unavailability.slice(0, 10).map((absence, index) => { const volunteer = data.volunteers.find((item) => item.id === absence.volunteer_id); const occurrence = data.occurrences.find((item) => item.id === absence.occurrence_id); const affected = data.assignments.some((assignment) => assignment.volunteer_id === absence.volunteer_id && assignment.occurrence_id === absence.occurrence_id); return <AbsenceItem key={absence.id} name={volunteer?.full_name ?? "Relawan"} date={occurrence ? formatDate(occurrence.starts_at, data.organization.timezone) : absence.unavailable_date} reason={absence.reason || "Tanpa catatan"} impact={affected ? "Sudah terjadwal • perlu pengganti" : "Belum ada bentrok jadwal"} tone={index} urgent={affected} />; })}</div> : <EmptyState icon={Check} title="Belum ada laporan" description="Ketidakhadiran yang dikirim relawan akan muncul di sini." />}</div></section></>;
 }
 
-function AbsenceItem({ initials, name, date, reason, impact, tone, urgent = false }: { initials: string; name: string; date: string; reason: string; impact: string; tone: number; urgent?: boolean }) {
-  return <article className="absence-item"><Avatar initials={initials} tone={tone} /><div><h3>{name}</h3><p><CalendarDays size={14} /> {date}</p><small>{reason}</small><span className={urgent ? "impact urgent" : "impact"}>{urgent ? <AlertCircle size={13} /> : <Check size={13} />}{impact}</span></div><button className="icon-button" type="button" aria-label={`Buka laporan ${name}`}><ChevronRight size={18} /></button></article>;
+function AbsenceItem({ name, date, reason, impact, tone, urgent = false }: { name: string; date: string; reason: string; impact: string; tone: number; urgent?: boolean }) {
+  return <article className="absence-item"><Avatar name={name} tone={tone} /><div><h3>{name}</h3><p><CalendarDays size={14} /> {date}</p><small>{reason}</small><span className={urgent ? "impact urgent" : "impact"}>{urgent ? <AlertCircle size={13} /> : <Check size={13} />}{impact}</span></div></article>;
 }
 
 function Notifications({ showToast }: { showToast: (message: string) => void }) {
-  return (
-    <>
-      <PageHeader title="Notifikasi" description="Atur kapan dan bagaimana relawan menerima kabar pelayanan." />
-      <section className="notification-grid">
-        <article className="card line-card">
-          <div className="line-logo">LINE</div>
-          <div><span className="eyebrow">INTEGRASI</span><h2>Hubungkan LINE Official Account</h2><p>Kirim penugasan, permintaan konfirmasi, dan pengingat langsung kepada relawan.</p></div>
-          <StatusPill tone="neutral">Belum terhubung</StatusPill>
-          <button className="button button-primary" type="button" onClick={() => showToast("Panduan koneksi LINE akan dibuka pada tahap integrasi.")}>Siapkan koneksi <ChevronRight size={17} /></button>
-        </article>
-        <article className="card notification-rules">
-          <div className="card-heading"><div><h2>Alur pengingat</h2><p>Urutan otomatis sebelum jadwal diterbitkan.</p></div></div>
-          <ol>
-            <li><span>1</span><div><strong>Minta ketersediaan</strong><p>Setiap tanggal 15 untuk bulan berikutnya</p></div><StatusPill tone="ready">Aktif</StatusPill></li>
-            <li><span>2</span><div><strong>Ingatkan sebelum tenggat</strong><p>2 hari sebelum batas pengisian</p></div><StatusPill tone="ready">Aktif</StatusPill></li>
-            <li><span>3</span><div><strong>Konfirmasi penugasan</strong><p>Segera setelah jadwal diterbitkan</p></div><StatusPill tone="ready">Aktif</StatusPill></li>
-          </ol>
-        </article>
-      </section>
-    </>
-  );
+  return <><PageHeader title="Notifikasi" description="Hubungkan LINE setelah data jadwal inti selesai disiapkan." /><section className="notification-grid"><article className="card line-card"><div className="line-logo">LINE</div><div><span className="eyebrow">INTEGRASI</span><h2>LINE Official Account</h2><p>Kirim penugasan, konfirmasi, dan pengingat langsung kepada relawan.</p></div><StatusPill tone="neutral">Belum terhubung</StatusPill><button className="button button-primary" type="button" onClick={() => showToast("Integrasi LINE akan dikerjakan pada tahap berikutnya.")}>Lihat tahap berikutnya <ChevronRight size={17} /></button></article></section></>;
 }
 
-function SettingsView() {
-  return (
-    <>
-      <PageHeader title="Pengaturan" description="Atur identitas organisasi, bahasa, dan aturan penjadwalan." />
-      <section className="settings-grid">
-        <article className="card settings-card"><div><span className="settings-icon"><MessageCircle size={20} /></span><div><h2>Bahasa aplikasi</h2><p>Bahasa untuk koordinator dan portal relawan.</p></div></div><div className="language-options"><button className="selected" type="button"><span>ID</span><strong>Bahasa Indonesia</strong><Check size={17} /></button><button type="button" disabled><span>EN</span><strong>English</strong><small>Segera</small></button><button type="button" disabled><span>繁</span><strong>繁體中文</strong><small>Segera</small></button></div></article>
-        <article className="card settings-card"><div><span className="settings-icon"><LineChart size={20} /></span><div><h2>Aturan pemerataan</h2><p>Preferensi saat sistem membuat draft jadwal.</p></div></div><label className="toggle-row"><span><strong>Hindari minggu berturut-turut</strong><small>Jika tersedia relawan lain yang memenuhi syarat</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><strong>Batasi satu tugas per hari</strong><small>Mencegah relawan mendapat dua bagian sekaligus</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><strong>Pertahankan penugasan manual</strong><small>Tugas yang dikunci tidak diubah saat membuat ulang</small></span><input type="checkbox" defaultChecked /></label></article>
-      </section>
-    </>
-  );
-}
-
-function EventDialog({ onClose, onSave }: { onClose: () => void; onSave: (event: EventGroup) => void }) {
+function SettingsView({ data, onChanged }: { data: PlannerData; onChanged: (message: string) => Promise<void> }) {
   const [name, setName] = useState("");
-  const [day, setDay] = useState("Minggu");
-  const [pattern, setPattern] = useState("Setiap minggu");
-  const previewDates = useMemo(() => {
-    const datesByDay: Record<string, Array<{ label: string; occurrence: number }>> = {
-      Minggu: [
-        { label: "2 Agu", occurrence: 1 },
-        { label: "9 Agu", occurrence: 2 },
-        { label: "16 Agu", occurrence: 3 },
-        { label: "23 Agu", occurrence: 4 },
-        { label: "30 Agu", occurrence: 5 },
-        { label: "6 Sep", occurrence: 1 },
-        { label: "13 Sep", occurrence: 2 },
-        { label: "20 Sep", occurrence: 3 },
-      ],
-      Sabtu: [
-        { label: "1 Agu", occurrence: 1 },
-        { label: "8 Agu", occurrence: 2 },
-        { label: "15 Agu", occurrence: 3 },
-        { label: "22 Agu", occurrence: 4 },
-        { label: "29 Agu", occurrence: 5 },
-        { label: "5 Sep", occurrence: 1 },
-        { label: "12 Sep", occurrence: 2 },
-        { label: "19 Sep", occurrence: 3 },
-      ],
-      Rabu: [
-        { label: "5 Agu", occurrence: 1 },
-        { label: "12 Agu", occurrence: 2 },
-        { label: "19 Agu", occurrence: 3 },
-        { label: "26 Agu", occurrence: 4 },
-        { label: "2 Sep", occurrence: 1 },
-        { label: "9 Sep", occurrence: 2 },
-        { label: "16 Sep", occurrence: 3 },
-      ],
-      Jumat: [
-        { label: "7 Agu", occurrence: 1 },
-        { label: "14 Agu", occurrence: 2 },
-        { label: "21 Agu", occurrence: 3 },
-        { label: "28 Agu", occurrence: 4 },
-        { label: "4 Sep", occurrence: 1 },
-        { label: "11 Sep", occurrence: 2 },
-        { label: "18 Sep", occurrence: 3 },
-      ],
-    };
-    const candidates = datesByDay[day];
-    const filtered = candidates.filter(({ occurrence }) => {
-      if (pattern === "Minggu ke-1 dan ke-3") return occurrence === 1 || occurrence === 3;
-      if (pattern === "Minggu ke-2 dan ke-4") return occurrence === 2 || occurrence === 4;
-      if (pattern === "Setiap minggu kecuali minggu ke-5") return occurrence !== 5;
-      return true;
-    });
-    return filtered.slice(0, 4).map(({ label }) => label);
-  }, [day, pattern]);
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    onSave({ id: Date.now(), name, cadence: `${pattern} • 09.00`, nextDate: "23 Agustus 2026", sections: 0, tone: "amber" });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  async function addSection(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setSaving(true); setError("");
+    try { await createServiceSection({ organizationId: data.organization.id, name }); setName(""); await onChanged("Bagian pelayanan berhasil ditambahkan."); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Bagian tidak dapat disimpan."); }
+    finally { setSaving(false); }
   }
-  return (
-    <div className="modal-layer" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
-      <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="event-dialog-title">
-        <header><div><p className="eyebrow">KEGIATAN BARU</p><h2 id="event-dialog-title">Atur jadwal berulang</h2><p>Lihat tanggal yang akan dibuat sebelum menyimpan.</p></div><button type="button" className="icon-button" onClick={onClose} aria-label="Tutup"><X size={20} /></button></header>
-        <form onSubmit={submit}>
-          <label>Nama kegiatan<input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="Contoh: Sunday Service" required /></label>
-          <div className="form-row"><label>Hari<select value={day} onChange={(event) => setDay(event.target.value)}><option>Minggu</option><option>Sabtu</option><option>Rabu</option><option>Jumat</option></select></label><label>Waktu<input type="time" defaultValue="09:00" /></label></div>
-          <label>Pola pengulangan<select value={pattern} onChange={(event) => setPattern(event.target.value)}><option>Setiap minggu</option><option>Minggu ke-1 dan ke-3</option><option>Minggu ke-2 dan ke-4</option><option>Setiap minggu kecuali minggu ke-5</option><option>Pilihan khusus</option></select></label>
-          <div className="date-preview"><div><CalendarDays size={18} /><span><strong>Pratinjau tanggal berikutnya</strong><small>{day} • {pattern}</small></span></div><div className="preview-dates">{previewDates.map((date) => <span key={date}>{date}</span>)}</div></div>
-          <footer><button className="button button-secondary" type="button" onClick={onClose}>Batal</button><button className="button button-primary" type="submit">Simpan kegiatan</button></footer>
-        </form>
-      </section>
-    </div>
+  return <><PageHeader title="Pengaturan" description="Atur struktur pelayanan dan bahasa aplikasi." /><section className="settings-grid"><article className="card settings-card section-settings"><div><span className="settings-icon"><Users size={20} /></span><div><h2>Bagian pelayanan</h2><p>Bagian ini digunakan untuk kualifikasi dan kebutuhan jadwal.</p></div></div><form className="section-form" onSubmit={addSection}><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Contoh: Worship" required /><button className="button button-primary" type="submit" disabled={saving}><Plus size={17} /> Tambah</button></form>{error ? <p className="form-error" role="alert">{error}</p> : null}<div className="section-list">{data.sections.length ? data.sections.map((section) => <span key={section.id}>{section.name}</span>) : <small>Belum ada bagian pelayanan.</small>}</div></article><article className="card settings-card"><div><span className="settings-icon"><MessageCircle size={20} /></span><div><h2>Bahasa aplikasi</h2><p>Bahasa untuk koordinator dan portal relawan.</p></div></div><div className="language-options"><button className="selected" type="button"><span>ID</span><strong>Bahasa Indonesia</strong><Check size={17} /></button><button type="button" disabled><span>EN</span><strong>English</strong><small>Segera</small></button><button type="button" disabled><span>繁</span><strong>繁體中文</strong><small>Segera</small></button></div></article></section></>;
+}
+
+function EventDialog({ data, onClose, onSaved }: { data: PlannerData; onClose: () => void; onSaved: () => Promise<void> }) {
+  const [name, setName] = useState("");
+  const [weekday, setWeekday] = useState(0);
+  const [startTime, setStartTime] = useState("09:00");
+  const [duration, setDuration] = useState(120);
+  const [pattern, setPattern] = useState<(typeof PATTERN_OPTIONS)[number]["value"]>("every_week");
+  const [customWeeks, setCustomWeeks] = useState<number[]>([1, 3]);
+  const [requirements, setRequirements] = useState<Record<string, number>>({});
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const weeks = useMemo(
+    () => pattern === "custom" ? customWeeks : [...(PATTERN_OPTIONS.find((option) => option.value === pattern)?.weeks ?? [])],
+    [customWeeks, pattern],
   );
+  const preview = useMemo(() => generateOccurrenceDates({ weekday, startTime, durationMinutes: duration, weekOccurrences: weeks, timezone: data.organization.timezone, count: 4 }), [weekday, startTime, duration, weeks, data.organization.timezone]);
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); if (!weeks.length) { setError("Pilih sedikitnya satu minggu dalam bulan."); return; } setSaving(true); setError("");
+    try { await createEventGroup({ organizationId: data.organization.id, userId: data.user.id, timezone: data.organization.timezone, name, weekday, startTime, durationMinutes: duration, recurrencePattern: pattern, weekOccurrences: weeks, requirements: Object.entries(requirements).filter(([, count]) => count > 0).map(([sectionId, neededCount]) => ({ sectionId, neededCount })) }); await onSaved(); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Kegiatan tidak dapat disimpan."); setSaving(false); }
+  }
+  return <Modal title="Atur jadwal berulang" eyebrow="KEGIATAN BARU" description="Tanggal berikutnya akan dibuat dan disimpan di Supabase." onClose={onClose}><form onSubmit={submit}><label>Nama kegiatan<input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="Contoh: Sunday Service" required /></label><div className="form-row"><label>Hari<select value={weekday} onChange={(event) => setWeekday(Number(event.target.value))}>{WEEKDAYS.map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}</select></label><label>Waktu<input type="time" value={startTime} onChange={(event) => setStartTime(event.target.value)} required /></label></div><label>Durasi<select value={duration} onChange={(event) => setDuration(Number(event.target.value))}><option value={60}>1 jam</option><option value={90}>1,5 jam</option><option value={120}>2 jam</option><option value={180}>3 jam</option></select></label><label>Pola pengulangan<select value={pattern} onChange={(event) => setPattern(event.target.value as typeof pattern)}>{PATTERN_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>{pattern === "custom" ? <fieldset className="week-options"><legend>Minggu dalam bulan</legend>{[1, 2, 3, 4, 5].map((week) => <label key={week}><input type="checkbox" checked={customWeeks.includes(week)} onChange={() => setCustomWeeks((current) => current.includes(week) ? current.filter((item) => item !== week) : [...current, week].sort())} /> Ke-{week}</label>)}</fieldset> : null}<fieldset className="requirement-options"><legend>Kebutuhan bagian</legend>{data.sections.length ? data.sections.map((section) => <label key={section.id}><span>{section.name}</span><input type="number" min="0" max="50" value={requirements[section.id] ?? 0} onChange={(event) => setRequirements((current) => ({ ...current, [section.id]: Number(event.target.value) }))} /></label>) : <p>Belum ada bagian pelayanan. Kegiatan dapat dibuat sekarang dan kebutuhan ditambahkan nanti.</p>}</fieldset><div className="date-preview"><div><CalendarDays size={18} /><span><strong>Pratinjau tanggal berikutnya</strong><small>{WEEKDAYS.find((day) => day.value === weekday)?.label}</small></span></div><div className="preview-dates">{preview.map((date) => <span key={date.startsAt}>{formatShortDate(date.startsAt, data.organization.timezone)}</span>)}</div></div>{error ? <p className="form-error" role="alert">{error}</p> : null}<footer><button className="button button-secondary" type="button" onClick={onClose}>Batal</button><button className="button button-primary" type="submit" disabled={saving}>{saving ? "Menyimpan..." : "Simpan kegiatan"}</button></footer></form></Modal>;
+}
+
+function VolunteerDialog({ data, volunteer, onClose, onSaved }: { data: PlannerData; volunteer: Volunteer | null; onClose: () => void; onSaved: () => Promise<void> }) {
+  const [name, setName] = useState(volunteer?.full_name ?? "");
+  const [email, setEmail] = useState(volunteer?.email ?? "");
+  const [status, setStatus] = useState<"active" | "resting" | "inactive">((volunteer?.status as "active" | "resting" | "inactive") ?? "active");
+  const [sectionIds, setSectionIds] = useState<string[]>(volunteer ? data.eligibilities.filter((item) => item.volunteer_id === volunteer.id).map((item) => item.section_id) : []);
+  const [eventIds, setEventIds] = useState<string[]>(volunteer ? data.eventGroupVolunteers.filter((item) => item.volunteer_id === volunteer.id).map((item) => item.event_group_id) : []);
+  const [saving, setSaving] = useState(false); const [error, setError] = useState("");
+  async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setSaving(true); setError(""); try { await saveVolunteer({ id: volunteer?.id, organizationId: data.organization.id, fullName: name, email, status, sectionIds, eventGroupIds: eventIds }); await onSaved(); } catch (cause) { setError(cause instanceof Error ? cause.message : "Relawan tidak dapat disimpan."); setSaving(false); } }
+  return <Modal title={volunteer ? "Kelola relawan" : "Tambah relawan"} eyebrow="RELAWAN" description="Tetapkan bagian dan kegiatan yang dapat dilayani." onClose={onClose}><form onSubmit={submit}><label>Nama lengkap<input autoFocus value={name} onChange={(event) => setName(event.target.value)} required /></label><label>Email <span>(opsional)</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label><label>Status<select value={status} onChange={(event) => setStatus(event.target.value as typeof status)}><option value="active">Aktif</option><option value="resting">Istirahat</option><option value="inactive">Nonaktif</option></select></label><fieldset className="selection-options"><legend>Bagian yang dikuasai</legend>{data.sections.length ? data.sections.map((section) => <label key={section.id}><input type="checkbox" checked={sectionIds.includes(section.id)} onChange={() => setSectionIds((current) => current.includes(section.id) ? current.filter((id) => id !== section.id) : [...current, section.id])} /> {section.name}</label>) : <p>Tambahkan bagian pelayanan melalui Pengaturan terlebih dahulu.</p>}</fieldset><fieldset className="selection-options"><legend>Kegiatan yang diikuti</legend>{data.events.length ? data.events.map((eventGroup) => <label key={eventGroup.id}><input type="checkbox" checked={eventIds.includes(eventGroup.id)} onChange={() => setEventIds((current) => current.includes(eventGroup.id) ? current.filter((id) => id !== eventGroup.id) : [...current, eventGroup.id])} /> {eventGroup.name}</label>) : <p>Belum ada kegiatan.</p>}</fieldset>{error ? <p className="form-error" role="alert">{error}</p> : null}<footer><button className="button button-secondary" type="button" onClick={onClose}>Batal</button><button className="button button-primary" type="submit" disabled={saving}>{saving ? "Menyimpan..." : "Simpan relawan"}</button></footer></form></Modal>;
+}
+
+function AssignmentDialog({ data, target, onClose, onChanged }: { data: PlannerData; target: { occurrence: EventOccurrence; section: ServiceSection }; onClose: () => void; onChanged: (message: string) => Promise<void> }) {
+  const [working, setWorking] = useState(false); const [error, setError] = useState("");
+  const existing = assignmentsFor(data, target.occurrence.id, target.section.id);
+  const occupied = new Set(assignmentsFor(data, target.occurrence.id).map((assignment) => assignment.volunteer_id));
+  const unavailable = new Set(data.unavailability.filter((absence) => absence.occurrence_id === target.occurrence.id).map((absence) => absence.volunteer_id));
+  const eligible = new Set(data.eligibilities.filter((item) => item.section_id === target.section.id).map((item) => item.volunteer_id));
+  const groupMembers = new Set(data.eventGroupVolunteers.filter((item) => item.event_group_id === target.occurrence.event_group_id).map((item) => item.volunteer_id));
+  const candidates = data.volunteers.filter((volunteer) => volunteer.status === "active" && eligible.has(volunteer.id) && groupMembers.has(volunteer.id) && !occupied.has(volunteer.id) && !unavailable.has(volunteer.id));
+  async function assign(volunteerId: string) { setWorking(true); setError(""); try { await assignVolunteer({ organizationId: data.organization.id, occurrenceId: target.occurrence.id, sectionId: target.section.id, volunteerId }); await onChanged("Relawan berhasil ditugaskan."); } catch (cause) { setError(cause instanceof Error ? cause.message : "Penugasan gagal."); } finally { setWorking(false); } }
+  async function remove(id: string) { setWorking(true); setError(""); try { await removeAssignment(id); await onChanged("Penugasan berhasil dihapus."); } catch (cause) { setError(cause instanceof Error ? cause.message : "Penugasan tidak dapat dihapus."); } finally { setWorking(false); } }
+  return <Modal title={target.section.name} eyebrow="ATUR PENUGASAN" description={`${data.events.find((event) => event.id === target.occurrence.event_group_id)?.name} • ${formatDate(target.occurrence.starts_at, data.organization.timezone)}`} onClose={onClose}><div className="assignment-manager"><h3>Sudah ditugaskan</h3>{existing.length ? existing.map((assignment) => { const volunteer = data.volunteers.find((item) => item.id === assignment.volunteer_id); return <div className="assignment-person" key={assignment.id}><Avatar name={volunteer?.full_name ?? "Relawan"} /><strong>{volunteer?.full_name}</strong><button type="button" className="icon-button danger" disabled={working} onClick={() => remove(assignment.id)} aria-label="Hapus penugasan"><Trash2 size={17} /></button></div>; }) : <p>Belum ada relawan.</p>}<h3>Relawan yang memenuhi syarat</h3>{candidates.length ? candidates.map((volunteer, index) => <button type="button" className="candidate-button" key={volunteer.id} disabled={working} onClick={() => assign(volunteer.id)}><Avatar name={volunteer.full_name} tone={index} /><span><strong>{volunteer.full_name}</strong><small>Tersedia dan memenuhi syarat</small></span><Plus size={17} /></button>) : <div className="inline-alert"><AlertCircle size={18} /><span>Tidak ada relawan aktif yang memenuhi bagian, kegiatan, dan ketersediaan ini.</span></div>}{error ? <p className="form-error" role="alert">{error}</p> : null}</div></Modal>;
+}
+
+function Modal({ title, eyebrow, description, onClose, children }: { title: string; eyebrow: string; description: string; onClose: () => void; children: ReactNode }) {
+  return <div className="modal-layer" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}><section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title"><header><div><p className="eyebrow">{eyebrow}</p><h2 id="modal-title">{title}</h2><p>{description}</p></div><button type="button" className="icon-button" onClick={onClose} aria-label="Tutup"><X size={20} /></button></header>{children}</section></div>;
 }
