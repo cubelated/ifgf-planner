@@ -247,7 +247,7 @@ a:focus-visible {
   margin: 0 12px 14px;
   padding: 12px;
   display: grid;
-  grid-template-columns: 36px 1fr 32px;
+  grid-template-columns: 36px 1fr auto;
   align-items: center;
   gap: 10px;
   border: 1px solid rgb(255 255 255 / 0.08);
@@ -277,6 +277,16 @@ a:focus-visible {
 
 .sidebar-account .icon-button {
   color: #8195a3;
+}
+
+.sidebar-account-actions {
+  display: flex !important;
+  flex-direction: row !important;
+  gap: 2px;
+}
+
+.sidebar-account-actions .icon-button:hover {
+  color: #edf4f8;
 }
 
 .app-main {
@@ -2152,6 +2162,24 @@ a:focus-visible {
   display: flex;
   justify-content: flex-end;
   gap: 9px;
+}
+
+.password-dialog {
+  width: min(100%, 480px);
+}
+
+.password-dialog form label {
+  display: grid;
+  gap: 7px;
+  color: var(--ink-700);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.password-dialog form label small {
+  color: var(--ink-500);
+  font-size: 9px;
+  font-weight: 450;
 }
 
 .button-danger {
