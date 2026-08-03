@@ -328,6 +328,10 @@ export default function PlannerApp() {
   } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [authMode, setAuthMode] = useState<
+    "sign-in" | "sign-up" | "magic-link"
+  >("sign-in");
   const [loginState, setLoginState] = useState<
     "idle" | "sending" | "sent" | "error"
   >("idle");
@@ -383,8 +387,40 @@ export default function PlannerApp() {
     event.preventDefault();
     setLoginState("sending");
     setLoginError("");
-    const { error } = await getSupabaseBrowserClient().auth.signInWithOtp({
-      email,
+    const supabase = getSupabaseBrowserClient();
+    const normalizedEmail = email.trim();
+
+    if (authMode === "sign-in") {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: normalizedEmail,
+        password,
+      });
+      if (error) {
+        setLoginState("error");
+        setLoginError("Email atau kata sandi tidak valid.");
+      }
+      return;
+    }
+
+    if (authMode === "sign-up") {
+      const { data: signUpData, error } = await supabase.auth.signUp({
+        email: normalizedEmail,
+        password,
+        options: {
+          emailRedirectTo: window.location.origin,
+        },
+      });
+      if (error) {
+        setLoginState("error");
+        setLoginError(error.message);
+        return;
+      }
+      if (!signUpData.session) setLoginState("sent");
+      return;
+    }
+
+    const { error } = await supabase.auth.signInWithOtp({
+      email: normalizedEmail,
       options: {
         shouldCreateUser: false,
         emailRedirectTo: window.location.origin,
@@ -412,6 +448,14 @@ export default function PlannerApp() {
       <LoginScreen
         email={email}
         setEmail={setEmail}
+        password={password}
+        setPassword={setPassword}
+        authMode={authMode}
+        setAuthMode={(mode) => {
+          setAuthMode(mode);
+          setLoginState("idle");
+          setLoginError("");
+        }}
         loginState={loginState}
         loginError={loginError}
         onSubmit={handleLogin}
@@ -787,16 +831,27 @@ function DataError({
 function LoginScreen({
   email,
   setEmail,
+  password,
+  setPassword,
+  authMode,
+  setAuthMode,
   loginState,
   loginError,
   onSubmit,
 }: {
   email: string;
   setEmail: (email: string) => void;
+  password: string;
+  setPassword: (password: string) => void;
+  authMode: "sign-in" | "sign-up" | "magic-link";
+  setAuthMode: (mode: "sign-in" | "sign-up" | "magic-link") => void;
   loginState: "idle" | "sending" | "sent" | "error";
   loginError: string;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const isPasswordMode = authMode !== "magic-link";
+  const isSignUp = authMode === "sign-up";
+
   return (
     <main className="login-page">
       <section className="login-story">
@@ -849,8 +904,32 @@ function LoginScreen({
           </span>
           <div className="login-heading">
             <p className="eyebrow">PORTAL IFGF</p>
-            <h2>Selamat datang kembali</h2>
-            <p>Masuk menggunakan email yang sudah terdaftar.</p>
+            <h2>{isSignUp ? "Buat akun" : "Selamat datang kembali"}</h2>
+            <p>
+              {isSignUp
+                ? "Daftar menggunakan email dan kata sandi."
+                : authMode === "magic-link"
+                  ? "Kami akan mengirim tautan masuk ke email Anda."
+                  : "Masuk menggunakan email dan kata sandi."}
+            </p>
+          </div>
+          <div className="auth-mode-tabs" aria-label="Pilihan autentikasi">
+            <button
+              type="button"
+              className={authMode === "sign-in" ? "active" : ""}
+              aria-pressed={authMode === "sign-in"}
+              onClick={() => setAuthMode("sign-in")}
+            >
+              Masuk
+            </button>
+            <button
+              type="button"
+              className={authMode === "sign-up" ? "active" : ""}
+              aria-pressed={authMode === "sign-up"}
+              onClick={() => setAuthMode("sign-up")}
+            >
+              Buat akun
+            </button>
           </div>
           {loginState === "sent" ? (
             <div className="login-success" role="status">
@@ -859,7 +938,11 @@ function LoginScreen({
               </span>
               <div>
                 <strong>Periksa email Anda</strong>
-                <p>Tautan masuk telah dikirim ke {email}.</p>
+                <p>
+                  {isSignUp
+                    ? `Tautan konfirmasi akun telah dikirim ke ${email}.`
+                    : `Tautan masuk telah dikirim ke ${email}.`}
+                </p>
               </div>
             </div>
           ) : (
@@ -875,6 +958,20 @@ function LoginScreen({
                   required
                 />
               </label>
+              {isPasswordMode ? (
+                <label>
+                  Kata sandi
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    placeholder={isSignUp ? "Minimal 6 karakter" : "Masukkan kata sandi"}
+                    autoComplete={isSignUp ? "new-password" : "current-password"}
+                    minLength={6}
+                    required
+                  />
+                </label>
+              ) : null}
               {loginState === "error" ? (
                 <p className="form-error" role="alert">
                   {loginError}
@@ -886,12 +983,29 @@ function LoginScreen({
                 disabled={loginState === "sending"}
               >
                 {loginState === "sending"
-                  ? "Mengirim..."
-                  : "Kirim tautan masuk"}
+                  ? isPasswordMode
+                    ? "Memproses..."
+                    : "Mengirim..."
+                  : isSignUp
+                    ? "Buat akun"
+                    : authMode === "magic-link"
+                      ? "Kirim tautan masuk"
+                      : "Masuk"}
                 <ChevronRight size={18} />
               </button>
             </form>
           )}
+          <button
+            className="magic-link-toggle"
+            type="button"
+            onClick={() =>
+              setAuthMode(authMode === "magic-link" ? "sign-in" : "magic-link")
+            }
+          >
+            {authMode === "magic-link"
+              ? "Masuk dengan kata sandi"
+              : "Masuk tanpa kata sandi melalui email"}
+          </button>
           <p className="login-note">
             Dengan masuk, Anda menyetujui kebijakan penggunaan data gereja.
           </p>
