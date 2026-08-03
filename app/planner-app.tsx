@@ -91,7 +91,11 @@ import {
   type Volunteer,
 } from "@/lib/planner-data";
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase";
-import { isDateAfterExpiry, lastDateOfMonth } from "@/lib/unavailability";
+import {
+  defaultUnavailabilityExpiry,
+  isDateAfterExpiry,
+  lastDateOfMonth,
+} from "@/lib/unavailability";
 import Schedule from "./pages/schedule";
 import SettingsView from "./pages/settings";
 
@@ -1722,7 +1726,9 @@ function Unavailability({
     monthKeyInTimeZone(new Date(), data.organization.timezone),
   );
   const [expiresOn, setExpiresOn] = useState(() =>
-    lastDateOfMonth(monthKeyInTimeZone(new Date(), data.organization.timezone)),
+    defaultUnavailabilityExpiry(
+      monthKeyInTimeZone(new Date(), data.organization.timezone),
+    ),
   );
   const [generatedLink, setGeneratedLink] = useState("");
   const [creating, setCreating] = useState(false);
@@ -1894,7 +1900,8 @@ function Unavailability({
                   );
                   setMonth(nextMonth);
                   setExpiresOn(
-                    nextRequest?.expires_on ?? lastDateOfMonth(nextMonth),
+                    nextRequest?.expires_on ??
+                      defaultUnavailabilityExpiry(nextMonth),
                   );
                   setGeneratedLink("");
                 }}

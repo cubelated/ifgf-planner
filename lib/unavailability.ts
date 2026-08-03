@@ -11,6 +11,20 @@ export function lastDateOfMonth(monthKey: string) {
   return `${monthKey}-${String(day).padStart(2, "0")}`;
 }
 
+export function defaultUnavailabilityExpiry(monthKey: string) {
+  if (!monthKeyPattern.test(monthKey)) {
+    throw new Error("Invalid month key.");
+  }
+
+  const [year, month] = monthKey.split("-").map(Number);
+  const previousMonth = new Date(Date.UTC(year, month - 2, 15));
+  return [
+    previousMonth.getUTCFullYear(),
+    String(previousMonth.getUTCMonth() + 1).padStart(2, "0"),
+    "15",
+  ].join("-");
+}
+
 export function isDateAfterExpiry(todayDateKey: string, expiresOn: string) {
   if (!dateKeyPattern.test(todayDateKey) || !dateKeyPattern.test(expiresOn)) {
     throw new Error("Invalid date key.");

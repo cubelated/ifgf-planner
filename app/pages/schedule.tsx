@@ -1,10 +1,11 @@
 import {
   EventOccurrence,
+  createPublicShareToken,
+  createScheduleShare,
   generateEventMonth,
   monthKeyAfter,
   monthKeyInTimeZone,
   PlannerData,
-  publishSchedule,
   ServiceSection,
 } from "@/lib/planner-data";
 import { useState } from "react";
@@ -26,9 +27,8 @@ import {
   FileSpreadsheet,
   FileText,
   ImageIcon,
-  Copy,
-  Bell,
   Plus,
+  Share2,
   CalendarDays,
   Users,
 } from "lucide-react";
@@ -267,7 +267,7 @@ export default function Schedule({
   onChanged: (message: string) => Promise<void>;
   showToast: (message: string) => void;
 }) {
-  const [publishing, setPublishing] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const [exporting, setExporting] = useState<ScheduleExportFormat | null>(null);
   const initialEventId = data.events[0]?.id ?? "";
   const [eventFilter, setEventFilter] = useState(initialEventId);
@@ -303,9 +303,6 @@ export default function Schedule({
   const sections = data.sections.filter((section) =>
     sectionIds.has(section.id),
   );
-  const published = data.scheduleVersions.some(
-    (version) => version.status === "published",
-  );
   const exportDates = occurrences.map((occurrence) =>
     formatDate(occurrence.starts_at, data.organization.timezone, {
       weekday: "long",
@@ -335,23 +332,45 @@ export default function Schedule({
     setSelectedMonth(defaultScheduleMonth(data, eventGroupId));
   }
 
-  async function handlePublish() {
-    setPublishing(true);
+  async function handleShare() {
+    if (!selectedEvent) return;
+    setSharing(true);
     try {
-      await publishSchedule({
+      const token = createPublicShareToken();
+      await createScheduleShare({
         organizationId: data.organization.id,
-        userId: data.user.id,
-        occurrences,
+        eventGroupId: selectedEvent.id,
+        month: selectedMonth,
+        token,
       });
-      await onChanged("Jadwal berhasil diterbitkan.");
+      const link = `${window.location.origin}/schedule-share#token=${encodeURIComponent(token)}`;
+      const shareData = {
+        title: `${selectedEvent.name} • ${formatMonthKey(selectedMonth)}`,
+        text: `Jadwal pelayanan ${selectedEvent.name} untuk ${formatMonthKey(selectedMonth)}.`,
+        url: link,
+      };
+
+      if (navigator.share) {
+        try {
+          await navigator.share(shareData);
+          showToast("Tautan jadwal berhasil dibagikan.");
+          return;
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") return;
+        }
+      }
+
+      if (!navigator.clipboard) {
+        throw new Error("Browser tidak mendukung berbagi atau menyalin tautan.");
+      }
+      await navigator.clipboard.writeText(link);
+      showToast("Tautan jadwal dibuat dan disalin.");
     } catch (error) {
       showToast(
-        error instanceof Error
-          ? error.message
-          : "Jadwal tidak dapat diterbitkan.",
+        error instanceof Error ? error.message : "Tautan jadwal tidak dapat dibuat.",
       );
     } finally {
-      setPublishing(false);
+      setSharing(false);
     }
   }
 
@@ -569,31 +588,19 @@ export default function Schedule({
                 </button>
               </div>
             </details>
-            <button
-              className="button button-secondary"
-              disabled={true}
-              type="button"
-              onClick={() => {
-                void navigator.clipboard?.writeText(window.location.href);
-                showToast("Tautan jadwal disalin.");
-              }}
-            >
-              <Copy size={17} /> Salin tautan
-            </button>
             {canManage ? (
               <button
                 className="button button-primary"
                 type="button"
-                disabled={true}
-                // disabled={publishing || !occurrences.length}
-                onClick={handlePublish}
+                disabled={!selectedEvent || sharing}
+                onClick={handleShare}
               >
-                <Bell size={17} />{" "}
-                {publishing
-                  ? "Menerbitkan..."
-                  : published
-                    ? "Terbitkan ulang"
-                    : "Terbitkan jadwal"}
+                {sharing ? (
+                  <LoaderCircle className="spin" size={17} />
+                ) : (
+                  <Share2 size={17} />
+                )}{" "}
+                {sharing ? "Membuat tautan..." : "Bagikan jadwal"}
               </button>
             ) : null}
           </>
