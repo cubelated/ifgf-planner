@@ -1081,6 +1081,35 @@ a:focus-visible {
 
 .login-form {
   margin-top: 30px;
+  display: grid;
+  gap: 16px;
+}
+
+.auth-mode-tabs {
+  margin-top: 24px;
+  padding: 4px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface-soft);
+}
+
+.auth-mode-tabs button {
+  min-height: 38px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-500);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.auth-mode-tabs button.active {
+  background: white;
+  color: var(--navy-900);
+  box-shadow: 0 1px 4px rgb(19 44 62 / 0.1);
 }
 
 .login-form label,
@@ -1120,7 +1149,7 @@ a:focus-visible {
 }
 
 .login-form .button {
-  margin-top: 13px;
+  margin-top: 1px;
 }
 
 .form-error {
@@ -1158,6 +1187,22 @@ a:focus-visible {
   margin: 4px 0 0;
   color: var(--ink-500);
   font-size: 11px;
+}
+
+.magic-link-toggle {
+  width: 100%;
+  margin-top: 18px;
+  border: 0;
+  padding: 4px;
+  background: transparent;
+  color: var(--blue-700);
+  font-size: 11px;
+  font-weight: 650;
+  text-align: center;
+}
+
+.magic-link-toggle:hover {
+  text-decoration: underline;
 }
 
 .demo-entry {
