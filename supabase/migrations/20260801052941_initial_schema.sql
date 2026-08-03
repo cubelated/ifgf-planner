@@ -358,7 +358,7 @@ begin
   insert into public.profiles (id, full_name, email)
   values (
     new.id,
-    coalesce(nullif(new.raw_user_meta_data ->> 'full_name', ''), split_part(coalesce(new.email, 'Relawan'), '@', 1)),
+    coalesce(nullif(new.raw_user_meta_data ->> 'full_name', ''), split_part(coalesce(new.email, 'Pelayan'), '@', 1)),
     new.email
   )
   on conflict (id) do update
@@ -377,7 +377,7 @@ for each row execute function private.handle_new_auth_user();
 insert into public.profiles (id, full_name, email)
 select
   user_record.id,
-  coalesce(nullif(user_record.raw_user_meta_data ->> 'full_name', ''), split_part(coalesce(user_record.email, 'Relawan'), '@', 1)),
+  coalesce(nullif(user_record.raw_user_meta_data ->> 'full_name', ''), split_part(coalesce(user_record.email, 'Pelayan'), '@', 1)),
   user_record.email
 from auth.users user_record
 on conflict (id) do update

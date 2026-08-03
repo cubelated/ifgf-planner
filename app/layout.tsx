@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: APP_CONFIG.name,
   description:
-    "Perencanaan jadwal pelayanan, ketersediaan relawan, dan komunikasi tim IFGF.",
+    "Perencanaan jadwal pelayanan, ketersediaan pelayan, dan komunikasi tim IFGF.",
   other: {
     "codex-preview": "development",
   },

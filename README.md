@@ -29,7 +29,7 @@ Indonesian-first volunteer scheduling web app for IFGF church teams. Application
 Requirements: Node.js 22.13 or newer.
 
 1. Install dependencies with `npm ci`.
-2. Copy `.env.example` to `.env.local`.
+2. Copy `.env.example` to `.env`.
 3. Add a Supabase project URL and publishable key.
 4. For a new Supabase project, link the Supabase CLI and run `supabase db push`.
 5. Deploy the public form endpoint with `supabase functions deploy unavailability-form`.

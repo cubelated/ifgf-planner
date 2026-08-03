@@ -8,7 +8,7 @@ export const messages = {
     overview: "Ringkasan",
     schedule: "Jadwal",
     events: "Kegiatan",
-    volunteers: "Relawan",
+    volunteers: "Pelayan",
     unavailability: "Ketidakhadiran",
     notifications: "Notifikasi",
     settings: "Pengaturan",

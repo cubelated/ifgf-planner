@@ -57,5 +57,5 @@ test("renders the public monthly unavailability form route", async () => {
     response.headers.get("content-type") ?? "",
     /^text\/html\b/i,
   );
-  assert.match(await response.text(), /Form ketidakhadiran relawan/i);
+  assert.match(await response.text(), /Form ketidakhadiran pelayan/i);
 });

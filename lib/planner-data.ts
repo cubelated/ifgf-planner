@@ -59,7 +59,7 @@ export async function loadPlannerData(user: User): Promise<PlannerData> {
   if (membershipError) fail("Keanggotaan organisasi tidak dapat dimuat.", membershipError);
   if (!membership) {
     throw new Error(
-      "Akun ini belum terhubung ke organisasi. Minta pemilik menambahkan Anda sebagai koordinator atau relawan.",
+      "Akun ini belum terhubung ke organisasi. Minta pemilik menambahkan Anda sebagai koordinator atau pelayan.",
     );
   }
 
@@ -144,7 +144,7 @@ export async function loadPlannerData(user: User): Promise<PlannerData> {
 
   const relationError =
     eligibilitiesResult.error || groupVolunteersResult.error || requirementsResult.error;
-  if (relationError) fail("Hubungan relawan dan kegiatan tidak dapat dimuat.", relationError);
+  if (relationError) fail("Hubungan pelayan dan kegiatan tidak dapat dimuat.", relationError);
 
   return {
     user,
@@ -218,7 +218,7 @@ export async function saveVolunteer(input: SaveVolunteerInput) {
         status: input.status,
       })
       .eq("id", volunteerId);
-    if (error) fail("Relawan tidak dapat diperbarui.", error);
+    if (error) fail("Pelayan tidak dapat diperbarui.", error);
   } else {
     const { data, error } = await supabase
       .from("volunteers")
@@ -230,7 +230,7 @@ export async function saveVolunteer(input: SaveVolunteerInput) {
       })
       .select("id")
       .single();
-    if (error) fail("Relawan tidak dapat ditambahkan.", error);
+    if (error) fail("Pelayan tidak dapat ditambahkan.", error);
     volunteerId = data.id;
     created = true;
   }
@@ -260,7 +260,7 @@ export async function saveVolunteer(input: SaveVolunteerInput) {
     }
   } catch (error) {
     if (created && volunteerId) await supabase.from("volunteers").delete().eq("id", volunteerId);
-    fail("Keahlian dan kegiatan relawan tidak dapat disimpan.", error);
+    fail("Keahlian dan kegiatan pelayan tidak dapat disimpan.", error);
   }
 }
 
@@ -287,7 +287,7 @@ function validateEventGroupInput(input: SaveEventGroupInput) {
     throw new Error("Setiap jenis pelayanan hanya boleh ditambahkan satu kali.");
   }
   if (input.requirements.some((requirement) => !Number.isInteger(requirement.neededCount) || requirement.neededCount < 1 || requirement.neededCount > 50)) {
-    throw new Error("Jumlah relawan untuk setiap jenis pelayanan harus antara 1 dan 50.");
+    throw new Error("Jumlah pelayan untuk setiap jenis pelayanan harus antara 1 dan 50.");
   }
 }
 
@@ -739,7 +739,7 @@ export async function assignVolunteer(input: {
       },
       { onConflict: "event_group_id,volunteer_id", ignoreDuplicates: true },
     );
-    if (membershipError) fail("Relawan tidak dapat ditambahkan ke kegiatan ini.", membershipError);
+    if (membershipError) fail("Pelayan tidak dapat ditambahkan ke kegiatan ini.", membershipError);
   }
   const { error } = await supabase.from("assignments").insert({
     organization_id: input.organizationId,
@@ -747,7 +747,7 @@ export async function assignVolunteer(input: {
     section_id: input.sectionId,
     volunteer_id: input.volunteerId,
   });
-  if (error) fail("Relawan tidak dapat ditugaskan pada posisi ini.", error);
+  if (error) fail("Pelayan tidak dapat ditugaskan pada posisi ini.", error);
 }
 
 export async function removeAssignment(assignmentId: string) {

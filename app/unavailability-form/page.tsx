@@ -72,7 +72,7 @@ function Logo() {
     <div className="public-form-logo">
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src="/ifgf-logo.png" alt={APP_CONFIG.logoAlt} />
-      <div><strong>{APP_CONFIG.name}</strong><span>Form ketidakhadiran relawan</span></div>
+      <div><strong>{APP_CONFIG.name}</strong><span>Form ketidakhadiran pelayan</span></div>
     </div>
   );
 }
@@ -259,9 +259,9 @@ export default function UnavailabilityFormPage() {
         <form className="public-unavailability-form" onSubmit={submit}>
           <div className="public-name-field">
             <label htmlFor="respondent-name">Nama Anda</label>
-            <div className="public-name-input"><Search size={18} /><input id="respondent-name" autoComplete="name" value={name} onChange={(event) => updateName(event.target.value)} onFocus={() => setSuggestionsOpen(true)} onBlur={() => window.setTimeout(() => setSuggestionsOpen(false), 120)} placeholder="Ketik atau pilih nama relawan" maxLength={120} required /></div>
-            {suggestionsOpen && suggestions.length ? <div className="public-name-suggestions" role="listbox" aria-label="Pilihan relawan">{suggestions.map((volunteer) => <button key={volunteer.id} type="button" role="option" aria-selected={volunteer.id === volunteerId} onMouseDown={(event) => event.preventDefault()} onClick={() => selectVolunteer(volunteer.id, volunteer.name)}><span><UserRound size={16} /></span>{volunteer.name}{volunteer.id === volunteerId ? <Check size={15} /> : null}</button>)}</div> : null}
-            {volunteerId ? <small className="name-match"><Check size={13} /> Terhubung ke daftar relawan</small> : name.trim().length >= 2 ? <small>Nama ini akan dikirim sebagai nama baru dan tidak mengubah daftar relawan.</small> : null}
+            <div className="public-name-input"><Search size={18} /><input id="respondent-name" autoComplete="name" value={name} onChange={(event) => updateName(event.target.value)} onFocus={() => setSuggestionsOpen(true)} onBlur={() => window.setTimeout(() => setSuggestionsOpen(false), 120)} placeholder="Ketik atau pilih nama pelayan" maxLength={120} required /></div>
+            {suggestionsOpen && suggestions.length ? <div className="public-name-suggestions" role="listbox" aria-label="Pilihan pelayan">{suggestions.map((volunteer) => <button key={volunteer.id} type="button" role="option" aria-selected={volunteer.id === volunteerId} onMouseDown={(event) => event.preventDefault()} onClick={() => selectVolunteer(volunteer.id, volunteer.name)}><span><UserRound size={16} /></span>{volunteer.name}{volunteer.id === volunteerId ? <Check size={15} /> : null}</button>)}</div> : null}
+            {volunteerId ? <small className="name-match"><Check size={13} /> Terhubung ke daftar pelayan</small> : name.trim().length >= 2 ? <small>Nama ini akan dikirim sebagai nama baru dan tidak mengubah daftar pelayan.</small> : null}
           </div>
 
           <fieldset className="public-calendar-fieldset">
