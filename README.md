@@ -14,6 +14,7 @@ Indonesian-first volunteer scheduling web app for IFGF church teams. Application
 - Draft/published schedule versions
 - Draft LINE Official Account notification flow
 - Supabase email/password account creation and sign-in by default
+- In-session password changes with current-password verification and no email confirmation
 - Optional passwordless email-link sign-in for existing users
 - Indonesian localization foundation for future English and Traditional Chinese support
 

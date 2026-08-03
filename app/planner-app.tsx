@@ -34,6 +34,7 @@ import {
   FileText,
   GripVertical,
   Image as ImageIcon,
+  KeyRound,
   LayoutDashboard,
   LoaderCircle,
   LogOut,
@@ -313,6 +314,7 @@ export default function PlannerApp() {
   const [dataError, setDataError] = useState("");
   const [view, setView] = useState<View>("overview");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
   const [eventDialog, setEventDialog] = useState<EventGroup | "new" | null>(
     null,
   );
@@ -571,15 +573,29 @@ export default function PlannerApp() {
             <strong>{data.profile.full_name}</strong>
             <span>{roleLabel}</span>
           </div>
-          <button
-            className="icon-button"
-            type="button"
-            onClick={handleLogout}
-            aria-label={translate("signOut")}
-            title={translate("signOut")}
-          >
-            <LogOut size={18} />
-          </button>
+          <div className="sidebar-account-actions">
+            <button
+              className="icon-button"
+              type="button"
+              onClick={() => {
+                setPasswordDialogOpen(true);
+                setMenuOpen(false);
+              }}
+              aria-label="Ubah kata sandi"
+              title="Ubah kata sandi"
+            >
+              <KeyRound size={18} />
+            </button>
+            <button
+              className="icon-button"
+              type="button"
+              onClick={handleLogout}
+              aria-label={translate("signOut")}
+              title={translate("signOut")}
+            >
+              <LogOut size={18} />
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -741,6 +757,16 @@ export default function PlannerApp() {
           }}
         />
       ) : null}
+      {passwordDialogOpen ? (
+        <ChangePasswordDialog
+          email={user.email ?? ""}
+          onClose={() => setPasswordDialogOpen(false)}
+          onChanged={() => {
+            setPasswordDialogOpen(false);
+            showToast("Kata sandi berhasil diperbarui.");
+          }}
+        />
+      ) : null}
 
       {toast ? (
         <div className="toast" role="status">
@@ -757,6 +783,163 @@ export default function PlannerApp() {
           </button>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function ChangePasswordDialog({
+  email,
+  onClose,
+  onChanged,
+}: {
+  email: string;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function changePassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+
+    if (!email) {
+      setError("Akun ini tidak memiliki alamat email.");
+      return;
+    }
+    if (newPassword.length < 8) {
+      setError("Kata sandi baru harus memiliki minimal 8 karakter.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError("Konfirmasi kata sandi baru tidak cocok.");
+      return;
+    }
+    if (currentPassword === newPassword) {
+      setError("Kata sandi baru harus berbeda dari kata sandi saat ini.");
+      return;
+    }
+
+    setSaving(true);
+    const auth = getSupabaseBrowserClient().auth;
+    const { error: verificationError } = await auth.signInWithPassword({
+      email,
+      password: currentPassword,
+    });
+    if (verificationError) {
+      setSaving(false);
+      setError("Kata sandi saat ini tidak valid.");
+      return;
+    }
+
+    const { error: updateError } = await auth.updateUser({
+      password: newPassword,
+    });
+    setSaving(false);
+    if (updateError) {
+      setError(updateError.message);
+      return;
+    }
+    onChanged();
+  }
+
+  return (
+    <div
+      className="modal-layer"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !saving) onClose();
+      }}
+    >
+      <section
+        className="modal-card password-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="change-password-title"
+      >
+        <header>
+          <div>
+            <p className="eyebrow">KEAMANAN AKUN</p>
+            <h2 id="change-password-title">Ubah kata sandi</h2>
+            <p>Perubahan diterapkan langsung tanpa konfirmasi email.</p>
+          </div>
+          <button
+            className="icon-button"
+            type="button"
+            onClick={onClose}
+            aria-label="Tutup"
+            disabled={saving}
+          >
+            <X size={19} />
+          </button>
+        </header>
+        <form onSubmit={changePassword}>
+          <label>
+            Kata sandi saat ini
+            <input
+              type="password"
+              value={currentPassword}
+              onChange={(event) => setCurrentPassword(event.target.value)}
+              autoComplete="current-password"
+              required
+              autoFocus
+            />
+          </label>
+          <label>
+            Kata sandi baru
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+              autoComplete="new-password"
+              minLength={8}
+              required
+            />
+            <small>Gunakan minimal 8 karakter.</small>
+          </label>
+          <label>
+            Konfirmasi kata sandi baru
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              autoComplete="new-password"
+              minLength={8}
+              required
+            />
+          </label>
+          {error ? (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          ) : null}
+          <footer>
+            <button
+              className="button button-secondary"
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+            >
+              Batal
+            </button>
+            <button
+              className="button button-primary"
+              type="submit"
+              disabled={saving}
+            >
+              {saving ? (
+                <LoaderCircle className="spin" size={17} />
+              ) : (
+                <KeyRound size={17} />
+              )}
+              {saving ? "Menyimpan..." : "Ubah kata sandi"}
+            </button>
+          </footer>
+        </form>
+      </section>
     </div>
   );
 }
