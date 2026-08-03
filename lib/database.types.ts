@@ -316,6 +316,51 @@ export type Database = {
         }
         Relationships: []
       }
+      schedule_shares: {
+        Row: {
+          created_at: string
+          created_by: string
+          event_group_id: string
+          id: string
+          organization_id: string
+          share_month: string
+          token_hash: string
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          event_group_id: string
+          id?: string
+          organization_id: string
+          share_month: string
+          token_hash: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          event_group_id?: string
+          id?: string
+          organization_id?: string
+          share_month?: string
+          token_hash?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "schedule_shares_event_group_id_fkey"
+            columns: ["event_group_id"]
+            isOneToOne: false
+            referencedRelation: "event_groups"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "schedule_shares_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       schedule_versions: {
         Row: {
           created_at: string
@@ -638,6 +683,15 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      create_schedule_share: {
+        Args: {
+          share_token: string
+          target_event_group_id: string
+          target_month: string
+          target_organization_id: string
+        }
+        Returns: string
+      }
       create_unavailability_request: {
         Args: {
           request_token: string
@@ -649,6 +703,10 @@ export type Database = {
       }
       get_unavailability_form: {
         Args: { request_token: string }
+        Returns: Json
+      }
+      get_shared_schedule: {
+        Args: { share_token: string }
         Returns: Json
       }
       reorder_service_sections: {

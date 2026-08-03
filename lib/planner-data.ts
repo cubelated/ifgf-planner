@@ -5,6 +5,9 @@ import {
   monthKeyInTimeZone,
 } from "./recurrence";
 import { getSupabaseBrowserClient } from "./supabase";
+import { parsePublicScheduleShare } from "./schedule-share";
+
+export type { PublicScheduleShare } from "./schedule-share";
 
 export { generateOccurrenceDates, monthKeyAfter, monthKeyInTimeZone } from "./recurrence";
 
@@ -600,6 +603,46 @@ export async function createUnavailabilityRequest(input: {
   });
   if (error) fail("Tautan formulir tidak dapat dibuat.", error);
   return data;
+}
+
+export function createPublicShareToken() {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join("");
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replaceAll("=", "");
+}
+
+export async function createScheduleShare(input: {
+  organizationId: string;
+  eventGroupId: string;
+  month: string;
+  token: string;
+}) {
+  const supabase = getSupabaseBrowserClient();
+  const { data, error } = await supabase.rpc("create_schedule_share", {
+    target_organization_id: input.organizationId,
+    target_event_group_id: input.eventGroupId,
+    target_month: `${input.month}-01`,
+    share_token: input.token,
+  });
+  if (error) fail("Tautan jadwal tidak dapat dibuat.", error);
+  return data;
+}
+
+export async function loadPublicScheduleShare(token: string) {
+  const supabase = getSupabaseBrowserClient();
+  const { data, error } = await supabase.functions.invoke("schedule-share", {
+    body: { token },
+  });
+  if (error) {
+    throw new Error(
+      await publicFunctionErrorMessage(error, "Jadwal tidak dapat dibuka sekarang."),
+      { cause: error },
+    );
+  }
+  return parsePublicScheduleShare(data);
 }
 
 export type PublicUnavailabilityForm = {
