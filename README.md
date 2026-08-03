@@ -12,7 +12,10 @@ Indonesian-first volunteer scheduling web app for IFGF church teams. Application
 - Shareable monthly unavailability forms with name autocomplete and date selection
 - Month-filtered coordinator reports with assignment-conflict counts
 - Draft/published schedule versions
-- Draft LINE Official Account notification flow
+- Event-scoped LINE Official Account group connections
+- Scheduled unavailability-form announcements with an expiry-day reminder
+- Schedule-image export and LINE group broadcast
+- Configurable volunteer reminders (24 hours before by default)
 - Supabase email/password account creation and sign-in by default
 - In-session password changes with current-password verification and no email confirmation
 - Optional passwordless email-link sign-in for existing users
@@ -36,7 +39,11 @@ Requirements: Node.js 22.13 or newer.
 4. For a new Supabase project, link the Supabase CLI and run `supabase db push`.
 5. Deploy the public form endpoint with `supabase functions deploy unavailability-form`.
    The checked-in `supabase/config.toml` disables gateway JWT verification for this function because the random request token is its credential.
-6. Run `npm run dev`.
+6. Configure `LINE_CHANNEL_SECRET` and `LINE_CHANNEL_ACCESS_TOKEN` as Supabase secrets.
+7. Deploy `line-webhook`, `create-line-connection-code`, `send-line-reminders`, and
+   `broadcast-line-schedule`. Keep JWT verification enabled for every function except
+   `line-webhook`, which verifies the LINE signature itself.
+8. Run `npm run dev`.
 
 Without environment variables, the app displays a configuration-required screen. It never falls back to fake data.
 
@@ -64,7 +71,7 @@ Only use the Supabase publishable key in the browser. Never expose a secret or s
 
 - Add coordinator invitations and LINE Login
 - Implement the deterministic draft scheduling engine and locked assignments
-- Connect LINE Messaging API webhooks and delivery logs
+- Add LINE delivery-history and retry management screens
 - Add English and Traditional Chinese dictionaries
 - Add end-to-end and accessibility tests
 
