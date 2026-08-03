@@ -726,8 +726,8 @@ function ConfigurationRequired() {
         lalu mulai ulang aplikasi.
       </p>
       <pre>
-        NEXT_PUBLIC_SUPABASE_URL=...{"\n"}
-        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=...
+        VITE_SUPABASE_URL=...{"\n"}
+        VITE_SUPABASE_PUBLISHABLE_KEY=...
       </pre>
     </main>
   );

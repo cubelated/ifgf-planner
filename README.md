@@ -41,8 +41,8 @@ Without environment variables, the app displays a configuration-required screen.
 ## Environment variables
 
 ```dotenv
-NEXT_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_key
+VITE_SUPABASE_URL=https://your-project-ref.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_key
 ```
 
 Only use the Supabase publishable key in the browser. Never expose a secret or service-role key.
