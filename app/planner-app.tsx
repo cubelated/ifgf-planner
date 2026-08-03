@@ -82,8 +82,10 @@ import {
   publishSchedule,
   reorderServiceSections,
   removeAssignment,
+  saveLineReminderSetting,
   saveEventGroup,
   saveVolunteer,
+  scheduleUnavailabilityLineBroadcast,
   type EventGroup,
   type EventDeletionImpact,
   type EventOccurrence,
@@ -204,7 +206,7 @@ function formatTime(value: string, timezone: string) {
     timeZone: timezone,
     hour: "2-digit",
     minute: "2-digit",
-    hour12: false,
+    hourCycle: "h23",
   }).format(new Date(value));
 }
 
@@ -215,6 +217,54 @@ export function formatMonthKey(monthKey: string) {
     year: "numeric",
     timeZone: "UTC",
   }).format(new Date(Date.UTC(year, month - 1, 1)));
+}
+
+function dateTimeLocalInTimeZone(value: Date, timezone: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(value);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}T${part("hour")}:${part("minute")}`;
+}
+
+function zonedDateTimeToIso(value: string, timezone: string) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  if (!match) throw new Error("Tanggal dan waktu LINE tidak valid.");
+  const [, year, month, day, hour, minute] = match.map(Number);
+  const desiredUtc = Date.UTC(year, month - 1, day, hour, minute);
+  let candidate = desiredUtc;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const rendered = dateTimeLocalInTimeZone(new Date(candidate), timezone);
+    const renderedMatch = rendered.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+    if (!renderedMatch) break;
+    const [, renderedYear, renderedMonth, renderedDay, renderedHour, renderedMinute] =
+      renderedMatch.map(Number);
+    candidate += desiredUtc - Date.UTC(
+      renderedYear,
+      renderedMonth - 1,
+      renderedDay,
+      renderedHour,
+      renderedMinute,
+    );
+  }
+  if (dateTimeLocalInTimeZone(new Date(candidate), timezone) !== value) {
+    throw new Error("Waktu tersebut tidak tersedia di zona waktu organisasi.");
+  }
+  return new Date(candidate).toISOString();
+}
+
+function nextQuarterHour(timezone: string) {
+  const next = new Date();
+  next.setUTCSeconds(0, 0);
+  next.setUTCMinutes(Math.ceil((next.getUTCMinutes() + 1) / 15) * 15);
+  return dateTimeLocalInTimeZone(next, timezone);
 }
 
 function localDateKey(value: string, timezone: string) {
@@ -691,7 +741,11 @@ export default function PlannerApp() {
             />
           ) : null}
           {view === "notifications" && canManage ? (
-            <Notifications showToast={showToast} />
+            <Notifications
+              data={data}
+              onChanged={changed}
+              showToast={showToast}
+            />
           ) : null}
           {view === "settings" && canManage ? (
             <SettingsView
@@ -2019,16 +2073,26 @@ function Unavailability({
   onChanged: (message: string) => Promise<void>;
   showToast: (message: string) => void;
 }) {
-  const [month, setMonth] = useState(
-    monthKeyInTimeZone(new Date(), data.organization.timezone),
+  const initialMonth = monthKeyInTimeZone(new Date(), data.organization.timezone);
+  const initialRequest = data.unavailabilityRequests.find(
+    (request) => request.request_month === `${initialMonth}-01`,
   );
+  const [month, setMonth] = useState(initialMonth);
   const [expiresOn, setExpiresOn] = useState(() =>
-    defaultUnavailabilityExpiry(
-      monthKeyInTimeZone(new Date(), data.organization.timezone),
-    ),
+    initialRequest?.expires_on ?? defaultUnavailabilityExpiry(initialMonth),
   );
   const [generatedLink, setGeneratedLink] = useState("");
   const [creating, setCreating] = useState(false);
+  const connectedEvents = data.events.filter((event) =>
+    data.lineConnections.some((connection) => connection.event_id === event.id),
+  );
+  const [sendToLine, setSendToLine] = useState(false);
+  const [lineEventId, setLineEventId] = useState(connectedEvents[0]?.id ?? "");
+  const [announceAt, setAnnounceAt] = useState(() =>
+    nextQuarterHour(data.organization.timezone),
+  );
+  const [remindOnLastDay, setRemindOnLastDay] = useState(true);
+  const [reminderAt, setReminderAt] = useState(() => `${expiresOn}T09:00`);
   const today = localDateKey(
     new Date().toISOString(),
     data.organization.timezone,
@@ -2046,6 +2110,20 @@ function Unavailability({
   const requestUnavailable = requestClosedByStatus || requestExpiredByDate;
   const expiryInvalid =
     !expiresOn || !monthEndsOn || expiresOn < today || expiresOn > monthEndsOn;
+  const nowLocal = dateTimeLocalInTimeZone(new Date(), data.organization.timezone);
+  const latestLineTime = expiresOn ? `${expiresOn}T23:59` : "";
+  const lineScheduleInvalid = sendToLine && (
+    !lineEventId ||
+    !announceAt ||
+    announceAt < nowLocal ||
+    announceAt > latestLineTime ||
+    (remindOnLastDay && (
+      !reminderAt ||
+      !reminderAt.startsWith(`${expiresOn}T`) ||
+      reminderAt < announceAt ||
+      reminderAt > latestLineTime
+    ))
+  );
   const monthAbsences = data.unavailability.filter((absence) =>
     absence.unavailable_date.startsWith(month),
   );
@@ -2118,13 +2196,25 @@ function Unavailability({
     setCreating(true);
     try {
       const token = createRequestToken();
-      await createUnavailabilityRequest({
+      const requestId = await createUnavailabilityRequest({
         organizationId: data.organization.id,
         month,
         expiresOn,
         token,
       });
       const link = `${window.location.origin}/unavailability-form#token=${encodeURIComponent(token)}`;
+      if (sendToLine) {
+        await scheduleUnavailabilityLineBroadcast({
+          requestId,
+          eventId: lineEventId,
+          shareUrl: link,
+          announceAt: zonedDateTimeToIso(announceAt, data.organization.timezone),
+          reminderAt: remindOnLastDay
+            ? zonedDateTimeToIso(reminderAt, data.organization.timezone)
+            : null,
+          createdBy: data.user.id,
+        });
+      }
       setGeneratedLink(link);
       let copied = false;
       try {
@@ -2135,8 +2225,8 @@ function Unavailability({
       }
       await onChanged(
         copied
-          ? `Tautan formulir ${formatMonthKey(month)} dibuat dan disalin.`
-          : `Tautan formulir ${formatMonthKey(month)} berhasil dibuat.`,
+          ? `Tautan formulir ${formatMonthKey(month)} dibuat${sendToLine ? " dan dijadwalkan ke LINE" : ""}, lalu disalin.`
+          : `Tautan formulir ${formatMonthKey(month)} berhasil dibuat${sendToLine ? " dan dijadwalkan ke LINE" : ""}.`,
       );
     } catch (error) {
       showToast(
@@ -2200,6 +2290,9 @@ function Unavailability({
                     nextRequest?.expires_on ??
                       defaultUnavailabilityExpiry(nextMonth),
                   );
+                  const nextExpiry = nextRequest?.expires_on ??
+                    defaultUnavailabilityExpiry(nextMonth);
+                  setReminderAt(`${nextExpiry}T09:00`);
                   setGeneratedLink("");
                 }}
                 required
@@ -2214,6 +2307,7 @@ function Unavailability({
                 max={monthEndsOn}
                 onChange={(event) => {
                   setExpiresOn(event.target.value);
+                  setReminderAt(`${event.target.value}T09:00`);
                   setGeneratedLink("");
                 }}
               />
@@ -2222,6 +2316,70 @@ function Unavailability({
                 {data.organization.timezone}).
               </small>
             </label>
+          </div>
+
+          <div className="line-schedule-panel">
+            <label className="toggle-row">
+              <input
+                type="checkbox"
+                checked={sendToLine}
+                disabled={!connectedEvents.length}
+                onChange={(event) => setSendToLine(event.target.checked)}
+              />
+              <span>
+                <strong>Kirim formulir ke grup LINE</strong>
+                <small>
+                  {connectedEvents.length
+                    ? "Pesan akan dikirim otomatis pada waktu yang dipilih."
+                    : "Hubungkan grup LINE ke kegiatan terlebih dahulu."}
+                </small>
+              </span>
+            </label>
+            {sendToLine ? (
+              <div className="line-schedule-fields">
+                <label>
+                  Grup kegiatan
+                  <select value={lineEventId} onChange={(event) => setLineEventId(event.target.value)}>
+                    {connectedEvents.map((event) => (
+                      <option key={event.id} value={event.id}>{event.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Kirim pengumuman pada
+                  <input
+                    type="datetime-local"
+                    value={announceAt}
+                    min={nowLocal}
+                    max={latestLineTime}
+                    onChange={(event) => setAnnounceAt(event.target.value)}
+                  />
+                </label>
+                <label className="toggle-row line-reminder-toggle">
+                  <input
+                    type="checkbox"
+                    checked={remindOnLastDay}
+                    onChange={(event) => setRemindOnLastDay(event.target.checked)}
+                  />
+                  <span>
+                    <strong>Ingatkan pada hari terakhir</strong>
+                    <small>Sebelum formulir ditutup pada akhir hari.</small>
+                  </span>
+                </label>
+                {remindOnLastDay ? (
+                  <label>
+                    Waktu pengingat terakhir
+                    <input
+                      type="datetime-local"
+                      value={reminderAt}
+                      min={announceAt}
+                      max={latestLineTime}
+                      onChange={(event) => setReminderAt(event.target.value)}
+                    />
+                  </label>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           <div
@@ -2264,12 +2422,17 @@ function Unavailability({
               formulir.
             </p>
           ) : null}
+          {lineScheduleInvalid ? (
+            <p className="form-error" role="alert">
+              Jadwal LINE harus berada antara sekarang dan akhir tanggal kedaluwarsa. Pengingat terakhir harus berada pada hari kedaluwarsa.
+            </p>
+          ) : null}
 
           <button
             className="button button-primary button-block"
             type="button"
             onClick={createLink}
-            disabled={creating || !month || expiryInvalid}
+            disabled={creating || !month || expiryInvalid || lineScheduleInvalid}
           >
             {creating ? (
               <LoaderCircle className="spin" size={17} />
@@ -2408,15 +2571,22 @@ function Unavailability({
 }
 
 function Notifications({
+  data,
+  onChanged,
   showToast,
 }: {
+  data: PlannerData;
+  onChanged: (message: string) => Promise<void>;
   showToast: (message: string) => void;
 }) {
+  const connectedEvents = data.events.filter((event) =>
+    data.lineConnections.some((connection) => connection.event_id === event.id),
+  );
   return (
     <>
       <PageHeader
         title="Notifikasi"
-        description="Hubungkan LINE setelah data jadwal inti selesai disiapkan."
+        description="Atur pengingat LINE per kegiatan. Waktu standar adalah 24 jam sebelum kegiatan."
       />
       <section className="notification-grid">
         <article className="card line-card">
@@ -2425,23 +2595,159 @@ function Notifications({
             <span className="eyebrow">INTEGRASI</span>
             <h2>LINE Official Account</h2>
             <p>
-              Kirim penugasan, konfirmasi, dan pengingat langsung kepada
-              pelayan.
+              Kirim formulir ketidakhadiran, gambar jadwal, dan pengingat
+              pelayanan langsung ke grup.
             </p>
           </div>
-          <StatusPill tone="neutral">Belum terhubung</StatusPill>
-          <button
-            className="button button-primary"
-            type="button"
-            onClick={() =>
-              showToast("Integrasi LINE akan dikerjakan pada tahap berikutnya.")
-            }
-          >
-            Lihat tahap berikutnya <ChevronRight size={17} />
-          </button>
+          <StatusPill tone={connectedEvents.length ? "ready" : "neutral"}>
+            {connectedEvents.length
+              ? `${connectedEvents.length} grup terhubung`
+              : "Belum terhubung"}
+          </StatusPill>
         </article>
+        {connectedEvents.map((event) => {
+          const connection = data.lineConnections.find(
+            (item) => item.event_id === event.id,
+          );
+          const setting = data.lineReminderSettings.find(
+            (item) => item.event_id === event.id,
+          );
+          return (
+            <LineReminderCard
+              key={event.id}
+              event={event}
+              groupName={connection?.group_name ?? "Grup LINE"}
+              initialSetting={setting}
+              userId={data.user.id}
+              onChanged={onChanged}
+              showToast={showToast}
+            />
+          );
+        })}
+        {!connectedEvents.length ? (
+          <EmptyState
+            icon={MessageCircle}
+            title="Belum ada grup LINE"
+            description="Hubungkan bot ke satu kegiatan dengan perintah /connect CODE sebelum mengaktifkan pengingat."
+          />
+        ) : null}
       </section>
     </>
+  );
+}
+
+function LineReminderCard({
+  event,
+  groupName,
+  initialSetting,
+  userId,
+  onChanged,
+  showToast,
+}: {
+  event: EventGroup;
+  groupName: string;
+  initialSetting: PlannerData["lineReminderSettings"][number] | undefined;
+  userId: string;
+  onChanged: (message: string) => Promise<void>;
+  showToast: (message: string) => void;
+}) {
+  const [enabled, setEnabled] = useState(initialSetting?.enabled ?? false);
+  const [hoursBefore, setHoursBefore] = useState(
+    (initialSetting?.reminder_minutes_before ?? 1440) / 60,
+  );
+  const [arrivalMinutes, setArrivalMinutes] = useState(
+    initialSetting?.arrival_minutes_before ?? 30,
+  );
+  const [customMessage, setCustomMessage] = useState(
+    initialSetting?.custom_message ?? "",
+  );
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    const reminderMinutes = Math.round(hoursBefore * 60);
+    if (reminderMinutes < 1 || reminderMinutes > 10_080) {
+      showToast("Waktu pengingat harus antara 1 menit dan 7 hari sebelum kegiatan.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await saveLineReminderSetting({
+        eventId: event.id,
+        enabled,
+        reminderMinutesBefore: reminderMinutes,
+        arrivalMinutesBefore: arrivalMinutes,
+        customMessage: customMessage.trim() || null,
+        createdBy: userId,
+      });
+      await onChanged(`Pengingat LINE ${event.name} berhasil disimpan.`);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Pengaturan LINE tidak dapat disimpan.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <article className="card line-reminder-card">
+      <div className="card-heading">
+        <div>
+          <span className="eyebrow">{groupName}</span>
+          <h2>{event.name}</h2>
+        </div>
+        <label className="switch-label">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(change) => setEnabled(change.target.checked)}
+          />
+          <span>{enabled ? "Aktif" : "Nonaktif"}</span>
+        </label>
+      </div>
+      <div className="line-reminder-fields">
+        <label>
+          Kirim sebelum kegiatan
+          <div className="input-with-suffix">
+            <input
+              type="number"
+              min="0.0167"
+              max="168"
+              step="0.5"
+              value={hoursBefore}
+              onChange={(change) => setHoursBefore(Number(change.target.value))}
+            />
+            <span>jam</span>
+          </div>
+          <small>Standar: 24 jam. Maksimal 7 hari.</small>
+        </label>
+        <label>
+          Minta hadir lebih awal
+          <div className="input-with-suffix">
+            <input
+              type="number"
+              min="0"
+              max="240"
+              step="5"
+              value={arrivalMinutes}
+              onChange={(change) => setArrivalMinutes(Number(change.target.value))}
+            />
+            <span>menit</span>
+          </div>
+        </label>
+        <label className="line-message-field">
+          Pesan tambahan (opsional)
+          <textarea
+            value={customMessage}
+            maxLength={500}
+            onChange={(change) => setCustomMessage(change.target.value)}
+            placeholder="Contoh: Mohon konfirmasi ke koordinator bila berhalangan."
+          />
+        </label>
+      </div>
+      <button className="button button-primary" type="button" disabled={saving} onClick={save}>
+        {saving ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />}
+        {saving ? "Menyimpan..." : "Simpan pengingat"}
+      </button>
+    </article>
   );
 }
 

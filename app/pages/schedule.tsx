@@ -33,7 +33,7 @@ import {
   Users,
 } from "lucide-react";
 
-type ScheduleExportFormat = "xlsx" | "csv" | "png";
+type ScheduleExportFormat = "xlsx" | "csv" | "png" | "png-line";
 
 type ScheduleExportRow = {
   volunteerType: string;
@@ -59,6 +59,15 @@ function downloadBlob(blob: Blob, fileName: string) {
   anchor.click();
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+}
+
+function blobToDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("Gambar jadwal tidak dapat dibaca."));
+    reader.readAsDataURL(blob);
+  });
 }
 
 function csvCell(value: string) {
@@ -420,16 +429,29 @@ export default function Schedule({
           new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }),
           `${fileName}.csv`,
         );
-      } else if (format === "png") {
-        downloadBlob(
-          await createScheduleImage(
-            selectedEvent.name,
-            monthLabel,
-            exportDates,
-            exportRows,
-          ),
-          `${fileName}.png`,
+      } else if (format === "png" || format === "png-line") {
+        const image = await createScheduleImage(
+          selectedEvent.name,
+          monthLabel,
+          exportDates,
+          exportRows,
         );
+        downloadBlob(image, `${fileName}.png`);
+        if (format === "png-line") {
+          if (image.size > 9_500_000) {
+            throw new Error("Gambar melebihi 9,5 MB dan tidak dapat dikirim ke LINE.");
+          }
+          const { error } = await (await import("@/lib/supabase"))
+            .getSupabaseBrowserClient()
+            .functions.invoke("broadcast-line-schedule", {
+              body: {
+                eventId: selectedEvent.id,
+                month: selectedMonth,
+                imageDataUrl: await blobToDataUrl(image),
+              },
+            });
+          if (error) throw new Error("Jadwal berhasil diekspor, tetapi tidak dapat dikirim ke LINE.", { cause: error });
+        }
       } else {
         const { default: writeExcelFile } =
           await import("write-excel-file/browser");
@@ -505,7 +527,11 @@ export default function Schedule({
           showGridLines: false,
         }).toFile(`${fileName}.xlsx`);
       }
-      showToast(`Jadwal ${format.toUpperCase()} berhasil diunduh.`);
+      showToast(
+        format === "png-line"
+          ? "Gambar jadwal berhasil diunduh dan dikirim ke grup LINE."
+          : `Jadwal ${format.toUpperCase()} berhasil diunduh.`,
+      );
     } catch (error) {
       showToast(
         error instanceof Error ? error.message : "Jadwal tidak dapat diekspor.",
@@ -586,6 +612,25 @@ export default function Schedule({
                     <small>.png</small>
                   </span>
                 </button>
+                {canManage && data.lineConnections.some(
+                  (connection) => connection.event_id === selectedEvent?.id,
+                ) ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={!exportRows.length || Boolean(exporting)}
+                    onClick={(event) => {
+                      event.currentTarget.closest("details")?.removeAttribute("open");
+                      void handleExport("png-line");
+                    }}
+                  >
+                    <Share2 size={18} />
+                    <span>
+                      <strong>Gambar + LINE</strong>
+                      <small>Unduh dan broadcast</small>
+                    </span>
+                  </button>
+                ) : null}
               </div>
             </details>
             {canManage ? (

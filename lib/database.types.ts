@@ -223,6 +223,145 @@ export type Database = {
           },
         ]
       }
+      line_event_reminder_settings: {
+        Row: {
+          arrival_minutes_before: number
+          created_at: string
+          created_by: string | null
+          custom_message: string | null
+          enabled: boolean
+          event_id: string
+          reminder_minutes_before: number
+          require_published_schedule: boolean
+          updated_at: string
+        }
+        Insert: {
+          arrival_minutes_before?: number
+          created_at?: string
+          created_by?: string | null
+          custom_message?: string | null
+          enabled?: boolean
+          event_id: string
+          reminder_minutes_before?: number
+          require_published_schedule?: boolean
+          updated_at?: string
+        }
+        Update: {
+          arrival_minutes_before?: number
+          created_at?: string
+          created_by?: string | null
+          custom_message?: string | null
+          enabled?: boolean
+          event_id?: string
+          reminder_minutes_before?: number
+          require_published_schedule?: boolean
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "line_event_reminder_settings_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: true
+            referencedRelation: "event_groups"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      line_group_connections: {
+        Row: {
+          connected_at: string
+          event_id: string
+          group_name: string | null
+          id: string
+          line_group_id: string
+          status: string
+        }
+        Insert: {
+          connected_at?: string
+          event_id: string
+          group_name?: string | null
+          id?: string
+          line_group_id: string
+          status?: string
+        }
+        Update: {
+          connected_at?: string
+          event_id?: string
+          group_name?: string | null
+          id?: string
+          line_group_id?: string
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "line_group_connections_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "event_groups"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      line_unavailability_broadcasts: {
+        Row: {
+          announce_at: string
+          announced_at: string | null
+          created_at: string
+          created_by: string
+          event_id: string
+          id: string
+          reminder_at: string | null
+          reminder_sent_at: string | null
+          request_id: string
+          share_url: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          announce_at: string
+          announced_at?: string | null
+          created_at?: string
+          created_by: string
+          event_id: string
+          id?: string
+          reminder_at?: string | null
+          reminder_sent_at?: string | null
+          request_id: string
+          share_url: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          announce_at?: string
+          announced_at?: string | null
+          created_at?: string
+          created_by?: string
+          event_id?: string
+          id?: string
+          reminder_at?: string | null
+          reminder_sent_at?: string | null
+          request_id?: string
+          share_url?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "line_unavailability_broadcasts_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "event_groups"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "line_unavailability_broadcasts_request_id_fkey"
+            columns: ["request_id"]
+            isOneToOne: false
+            referencedRelation: "unavailability_requests"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       organization_members: {
         Row: {
           created_at: string

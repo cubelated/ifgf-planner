@@ -25,6 +25,9 @@ export type Unavailability = Tables<"unavailability">;
 export type UnavailabilityRequest = Tables<"unavailability_requests">;
 export type ScheduleVersion = Tables<"schedule_versions">;
 export type Assignment = Tables<"assignments">;
+export type LineGroupConnection = Tables<"line_group_connections">;
+export type LineEventReminderSetting = Tables<"line_event_reminder_settings">;
+export type LineUnavailabilityBroadcast = Tables<"line_unavailability_broadcasts">;
 
 export type PlannerData = {
   user: User;
@@ -43,6 +46,9 @@ export type PlannerData = {
   unavailabilityRequests: UnavailabilityRequest[];
   assignments: Assignment[];
   scheduleVersions: ScheduleVersion[];
+  lineConnections: LineGroupConnection[];
+  lineReminderSettings: LineEventReminderSetting[];
+  lineUnavailabilityBroadcasts: LineUnavailabilityBroadcast[];
 };
 
 function fail(message: string, cause?: unknown): never {
@@ -72,7 +78,7 @@ export async function loadPlannerData(user: User): Promise<PlannerData> {
   const rangeEnd = new Date();
   rangeEnd.setDate(rangeEnd.getDate() + 550);
 
-  const [profileResult, organizationResult, sectionsResult, volunteersResult, eventsResult, occurrencesResult, absencesResult, requestsResult, assignmentsResult, versionsResult] =
+  const [profileResult, organizationResult, sectionsResult, volunteersResult, eventsResult, occurrencesResult, absencesResult, requestsResult, assignmentsResult, versionsResult, lineConnectionsResult, lineReminderSettingsResult, lineBroadcastsResult] =
     await Promise.all([
       supabase.from("profiles").select("*").eq("id", user.id).single(),
       supabase.from("organizations").select("*").eq("id", organizationId).single(),
@@ -112,6 +118,17 @@ export async function loadPlannerData(user: User): Promise<PlannerData> {
         .select("*")
         .eq("organization_id", organizationId)
         .order("created_at", { ascending: false }),
+      supabase
+        .from("line_group_connections")
+        .select("*")
+        .eq("status", "active"),
+      supabase
+        .from("line_event_reminder_settings")
+        .select("*"),
+      supabase
+        .from("line_unavailability_broadcasts")
+        .select("*")
+        .order("created_at", { ascending: false }),
     ]);
 
   const baseErrors = [
@@ -125,6 +142,9 @@ export async function loadPlannerData(user: User): Promise<PlannerData> {
     requestsResult.error,
     assignmentsResult.error,
     versionsResult.error,
+    lineConnectionsResult.error,
+    lineReminderSettingsResult.error,
+    lineBroadcastsResult.error,
   ].filter(Boolean);
   if (baseErrors.length) fail("Data perencana tidak dapat dimuat.", baseErrors[0]);
 
@@ -166,6 +186,9 @@ export async function loadPlannerData(user: User): Promise<PlannerData> {
     unavailabilityRequests: requestsResult.data ?? [],
     assignments: assignmentsResult.data ?? [],
     scheduleVersions: versionsResult.data ?? [],
+    lineConnections: lineConnectionsResult.data ?? [],
+    lineReminderSettings: lineReminderSettingsResult.data ?? [],
+    lineUnavailabilityBroadcasts: lineBroadcastsResult.data ?? [],
   };
 }
 
@@ -602,7 +625,56 @@ export async function createUnavailabilityRequest(input: {
     request_token: input.token,
   });
   if (error) fail("Tautan formulir tidak dapat dibuat.", error);
-  return data;
+  return data as string;
+}
+
+export async function scheduleUnavailabilityLineBroadcast(input: {
+  requestId: string;
+  eventId: string;
+  shareUrl: string;
+  announceAt: string;
+  reminderAt: string | null;
+  createdBy: string;
+}) {
+  const supabase = getSupabaseBrowserClient();
+  const { error: cancelError } = await supabase
+    .from("line_unavailability_broadcasts")
+    .update({ status: "cancelled", updated_at: new Date().toISOString() })
+    .eq("request_id", input.requestId)
+    .eq("status", "scheduled");
+  if (cancelError) fail("Jadwal LINE lama tidak dapat dibatalkan.", cancelError);
+
+  const { error } = await supabase.from("line_unavailability_broadcasts").insert({
+    request_id: input.requestId,
+    event_id: input.eventId,
+    share_url: input.shareUrl,
+    announce_at: input.announceAt,
+    reminder_at: input.reminderAt,
+    created_by: input.createdBy,
+  });
+  if (error) fail("Pengiriman formulir ke LINE tidak dapat dijadwalkan.", error);
+}
+
+export async function saveLineReminderSetting(input: {
+  eventId: string;
+  enabled: boolean;
+  reminderMinutesBefore: number;
+  arrivalMinutesBefore: number;
+  customMessage: string | null;
+  createdBy: string;
+}) {
+  const supabase = getSupabaseBrowserClient();
+  const { error } = await supabase.from("line_event_reminder_settings").upsert({
+    event_id: input.eventId,
+    enabled: input.enabled,
+    reminder_minutes_before: input.reminderMinutesBefore,
+    arrival_minutes_before: input.arrivalMinutesBefore,
+    custom_message: input.customMessage,
+    require_published_schedule: true,
+    created_by: input.createdBy,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "event_id" });
+  if (error) fail("Pengaturan pengingat LINE tidak dapat disimpan.", error);
 }
 
 export function createPublicShareToken() {

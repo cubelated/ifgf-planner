@@ -5,3 +5,15 @@ verify_jwt = false
 
 [functions.schedule-share]
 verify_jwt = false
+
+[functions.line-webhook]
+verify_jwt = false
+
+[functions.create-line-connection-code]
+verify_jwt = true
+
+[functions.send-line-reminders]
+verify_jwt = true
+
+[functions.broadcast-line-schedule]
+verify_jwt = true
