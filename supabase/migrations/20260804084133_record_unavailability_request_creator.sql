@@ -1,17 +1,3 @@
-alter table public.unavailability_requests
-  add column if not exists created_by uuid
-    default auth.uid()
-    references auth.users(id) on delete cascade;
-
-alter table public.unavailability_requests
-  alter column created_by set default auth.uid();
-
-alter table public.unavailability_requests
-  alter column created_by set not null;
-
-create index if not exists unavailability_requests_created_by_idx
-  on public.unavailability_requests (created_by);
-
 create or replace function public.create_unavailability_request(
   target_organization_id uuid,
   target_month date,
@@ -64,16 +50,14 @@ begin
     expires_on,
     token_hash,
     share_token,
-    status,
-    created_by
+    status
   ) values (
     target_organization_id,
     target_month,
     target_expires_on,
     encode(extensions.digest(request_token, 'sha256'), 'hex'),
     request_token,
-    'open',
-    (select auth.uid())
+    'open'
   )
   on conflict (organization_id, request_month) do update
   set expires_on = excluded.expires_on,
