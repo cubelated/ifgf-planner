@@ -108,6 +108,23 @@ test("the unavailability page restores and displays saved LINE scheduling", asyn
   assert.match(source, /Pengingat dijadwalkan/);
 });
 
+test("the unavailability page persists the latest selected month per user and organization", async () => {
+  const source = await readFile(
+    new URL("../app/planner-app.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /ifgf-planner:unavailability-month:\$\{data\.organization\.id\}:\$\{data\.user\.id\}/,
+  );
+  assert.match(source, /window\.localStorage\.getItem\(monthStorageKey\)/);
+  assert.match(
+    source,
+    /window\.localStorage\.setItem\(monthStorageKey, nextMonth\)/,
+  );
+  assert.match(source, /\^\\d\{4\}-\\d\{2\}\$/);
+});
+
 test("completed LINE unavailability broadcasts are deleted after every configured message is sent", async () => {
   const source = await readFile(
     new URL(
