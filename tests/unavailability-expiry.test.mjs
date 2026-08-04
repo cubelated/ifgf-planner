@@ -39,7 +39,7 @@ test("republishing a form preserves its existing share token", async () => {
     migration,
     /when unavailability_requests\.share_token is null then excluded\.token_hash/,
   );
-  assert.match(migration, /created_by\s*\) values \([\s\S]*?\(select auth\.uid\(\)\)/);
+  assert.doesNotMatch(migration, /created_by/);
 });
 
 test("the form UI creates or updates before offering a separate copy action", async () => {
@@ -55,11 +55,18 @@ test("the form UI creates or updates before offering a separate copy action", as
   );
 });
 
-test("LINE scheduling restores announce_at and records the coordinator", async () => {
-  const [migration, plannerData] = await Promise.all([
+test("LINE scheduling restores announce_at without storing a creator", async () => {
+  const [migration, removalMigration, plannerData] = await Promise.all([
     readFile(
       new URL(
         "../supabase/migrations/20260804083641_stabilize_unavailability_links_and_line_broadcasts.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(
+      new URL(
+        "../supabase/migrations/20260804091739_remove_created_by_columns.sql",
         import.meta.url,
       ),
       "utf8",
@@ -68,5 +75,35 @@ test("LINE scheduling restores announce_at and records the coordinator", async (
   ]);
   assert.match(migration, /add column if not exists announce_at timestamptz/);
   assert.match(migration, /alter column announce_at set not null/);
-  assert.match(plannerData, /created_by: userResult\.user\.id/);
+  assert.match(
+    removalMigration,
+    /alter table public\.line_unavailability_broadcasts\s+drop column if exists created_by/,
+  );
+  assert.match(
+    removalMigration,
+    /alter table public\.unavailability_requests\s+drop column if exists created_by/,
+  );
+  assert.match(
+    removalMigration,
+    /alter table public\.line_group_connection_codes\s+drop column if exists created_by/,
+  );
+  const schedulingFunction = plannerData.match(
+    /export async function scheduleUnavailabilityLineBroadcast[\s\S]*?\n}\n/,
+  )?.[0] ?? "";
+  assert.doesNotMatch(schedulingFunction, /created_by|auth\.getUser/);
+});
+
+test("schedule sharing no longer references a creator column", async () => {
+  const migration = await readFile(
+    new URL(
+      "../supabase/migrations/20260804091739_remove_created_by_columns.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(migration, /create or replace function public\.create_schedule_share/);
+  assert.doesNotMatch(
+    migration.match(/create or replace function public\.create_schedule_share[\s\S]*?\$\$;/)?.[0] ?? "",
+    /created_by/,
+  );
 });
