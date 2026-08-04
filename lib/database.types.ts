@@ -291,6 +291,7 @@ export type Database = {
           announce_at: string
           announced_at: string | null
           created_at: string
+          created_by: string
           event_id: string
           id: string
           reminder_at: string | null
@@ -304,6 +305,7 @@ export type Database = {
           announce_at: string
           announced_at?: string | null
           created_at?: string
+          created_by?: string
           event_id: string
           id?: string
           reminder_at?: string | null
@@ -317,6 +319,7 @@ export type Database = {
           announce_at?: string
           announced_at?: string | null
           created_at?: string
+          created_by?: string
           event_id?: string
           id?: string
           reminder_at?: string | null
@@ -626,30 +629,36 @@ export type Database = {
       unavailability_requests: {
         Row: {
           created_at: string
+          created_by: string
           expires_on: string
           id: string
           organization_id: string
           request_month: string
+          share_token: string | null
           status: string
           token_hash: string
           updated_at: string
         }
         Insert: {
           created_at?: string
+          created_by?: string
           expires_on: string
           id?: string
           organization_id: string
           request_month: string
+          share_token?: string | null
           status?: string
           token_hash: string
           updated_at?: string
         }
         Update: {
           created_at?: string
+          created_by?: string
           expires_on?: string
           id?: string
           organization_id?: string
           request_month?: string
+          share_token?: string | null
           status?: string
           token_hash?: string
           updated_at?: string
