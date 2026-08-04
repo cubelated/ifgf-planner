@@ -669,6 +669,7 @@ export default function PlannerApp() {
           {view === "schedule" ? (
             <Schedule
               data={data}
+              userId={user.id}
               canManage={canManage}
               onAssign={setAssignmentTarget}
               onChanged={changed}
@@ -768,6 +769,7 @@ export default function PlannerApp() {
       ) : null}
       {assignmentTarget ? (
         <AssignmentDialog
+          key={`${assignmentTarget.occurrence.id}:${assignmentTarget.section.id}`}
           data={data}
           target={assignmentTarget}
           onClose={() => setAssignmentTarget(null)}
@@ -3259,6 +3261,7 @@ function AssignmentDialog({
 }) {
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
+  const [volunteerSearch, setVolunteerSearch] = useState("");
   const existing = assignmentsFor(
     data,
     target.occurrence.id,
@@ -3308,6 +3311,12 @@ function AssignmentDialog({
       !assignedHere.has(volunteer.id) &&
       !candidates.some((candidate) => candidate.id === volunteer.id),
   );
+  const normalizedSearch = volunteerSearch.trim().toLocaleLowerCase("id-ID");
+  const matchesSearch = (volunteer: Volunteer) =>
+    !normalizedSearch ||
+    volunteer.full_name.toLocaleLowerCase("id-ID").includes(normalizedSearch);
+  const visibleCandidates = candidates.filter(matchesSearch);
+  const visibleBlocked = blocked.filter(matchesSearch);
   const eventName =
     data.events.find((event) => event.id === target.occurrence.event_group_id)
       ?.name ?? "kegiatan ini";
@@ -3406,9 +3415,21 @@ function AssignmentDialog({
         ) : (
           <p>Belum ada pelayan.</p>
         )}
+        <label className="assignment-search">
+          <span className="sr-only">Cari pelayan</span>
+          <Search size={17} aria-hidden="true" />
+          <input
+            type="search"
+            value={volunteerSearch}
+            onChange={(event) => setVolunteerSearch(event.target.value)}
+            placeholder="Cari nama pelayan..."
+            aria-label="Cari pelayan untuk ditugaskan"
+            autoComplete="off"
+          />
+        </label>
         <h3>Pelayan yang menguasai bagian ini</h3>
-        {candidates.length ? (
-          candidates.map((volunteer, index) => {
+        {visibleCandidates.length ? (
+          visibleCandidates.map((volunteer, index) => {
             const isGroupMember = groupMembers.has(volunteer.id);
             const otherSections = otherSectionNames(volunteer.id);
             const className = [
@@ -3449,6 +3470,11 @@ function AssignmentDialog({
               </button>
             );
           })
+        ) : normalizedSearch ? (
+          <div className="inline-alert">
+            <Search size={18} />
+            <span>Tidak ada pelayan yang cocok dengan pencarian.</span>
+          </div>
         ) : (
           <div className="inline-alert">
             <AlertCircle size={18} />
@@ -3458,10 +3484,10 @@ function AssignmentDialog({
             </span>
           </div>
         )}
-        {blocked.length ? (
+        {visibleBlocked.length ? (
           <div className="blocked-candidates">
             <h3>Tidak dapat dipilih saat ini</h3>
-            {blocked.map((volunteer, index) => (
+            {visibleBlocked.map((volunteer, index) => (
               <div className="candidate-blocked" key={volunteer.id}>
                 <Avatar
                   name={volunteer.full_name}
