@@ -1990,6 +1990,7 @@ function Unavailability({
   showToast: (message: string) => void;
 }) {
   const initialMonth = monthKeyInTimeZone(new Date(), data.organization.timezone);
+  const monthStorageKey = `ifgf-planner:unavailability-month:${data.organization.id}:${data.user.id}`;
   const initialRequest = data.unavailabilityRequests.find(
     (request) => request.request_month === `${initialMonth}-01`,
   );
@@ -2032,6 +2033,78 @@ function Unavailability({
         )
       : `${expiresOn}T09:00`,
   );
+
+  useEffect(() => {
+    let storedMonth: string | null = null;
+    try {
+      const storedValue = window.localStorage.getItem(monthStorageKey);
+      if (storedValue && /^\d{4}-\d{2}$/.test(storedValue)) {
+        storedMonth = storedValue;
+      }
+    } catch {
+      // Browser storage can be unavailable in private or restricted contexts.
+    }
+    if (!storedMonth || storedMonth === initialMonth) return;
+
+    const restoredMonth = storedMonth;
+    const restoredRequest = data.unavailabilityRequests.find(
+      (request) => request.request_month === `${restoredMonth}-01`,
+    );
+    const restoredLineBroadcast = restoredRequest
+      ? data.lineUnavailabilityBroadcasts.find(
+          (broadcast) =>
+            broadcast.request_id === restoredRequest.id &&
+            broadcast.status !== "cancelled",
+        )
+      : undefined;
+    const restoredExpiry =
+      restoredRequest?.expires_on ?? defaultUnavailabilityExpiry(restoredMonth);
+    let cancelled = false;
+    window.queueMicrotask(() => {
+      if (cancelled) return;
+      setMonth(restoredMonth);
+      setExpiresOn(restoredExpiry);
+      setGeneratedLink(
+        restoredRequest?.share_token
+          ? `${window.location.origin}/unavailability-form#token=${encodeURIComponent(restoredRequest.share_token)}`
+          : "",
+      );
+      setSendToLine(Boolean(restoredLineBroadcast));
+      setLineEventId(
+        restoredLineBroadcast?.event_id ??
+          data.events.find((event) =>
+            data.lineConnections.some(
+              (connection) => connection.event_id === event.id,
+            ),
+          )?.id ??
+          "",
+      );
+      setAnnounceAt(
+        restoredLineBroadcast
+          ? dateTimeLocalInTimeZone(
+              new Date(restoredLineBroadcast.announce_at),
+              data.organization.timezone,
+            )
+          : nextQuarterHour(data.organization.timezone),
+      );
+      setRemindOnLastDay(
+        restoredLineBroadcast
+          ? Boolean(restoredLineBroadcast.reminder_at)
+          : true,
+      );
+      setReminderAt(
+        restoredLineBroadcast?.reminder_at
+          ? dateTimeLocalInTimeZone(
+              new Date(restoredLineBroadcast.reminder_at),
+              data.organization.timezone,
+            )
+          : `${restoredExpiry}T09:00`,
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [data, initialMonth, monthStorageKey]);
 
   useEffect(() => {
     if (!initialRequest?.share_token) return;
@@ -2233,6 +2306,11 @@ function Unavailability({
                 onChange={(event) => {
                   const nextMonth = event.target.value;
                   if (!nextMonth) return;
+                  try {
+                    window.localStorage.setItem(monthStorageKey, nextMonth);
+                  } catch {
+                    // The selection still works when browser storage is unavailable.
+                  }
                   const nextRequest = data.unavailabilityRequests.find(
                     (request) => request.request_month === `${nextMonth}-01`,
                   );
