@@ -2827,6 +2827,22 @@ a:focus-visible {
 
 .assignment-manager h3 { margin: 8px 0 2px; font-size: 13px; color: var(--ink-700); }
 .assignment-manager > p { margin: 0; color: var(--ink-500); font-size: 13px; }
+.assignment-search {
+  position: relative;
+  margin-top: 7px;
+}
+.assignment-search > svg {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  z-index: 1;
+  transform: translateY(-50%);
+  color: var(--ink-500);
+  pointer-events: none;
+}
+.assignment-search input {
+  padding-left: 39px;
+}
 .assignment-person,
 .candidate-button {
   min-height: 52px;
