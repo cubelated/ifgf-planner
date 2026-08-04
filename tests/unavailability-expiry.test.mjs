@@ -93,6 +93,43 @@ test("LINE scheduling restores announce_at without storing a creator", async () 
   assert.doesNotMatch(schedulingFunction, /created_by|auth\.getUser/);
 });
 
+test("the unavailability page restores and displays saved LINE scheduling", async () => {
+  const source = await readFile(
+    new URL("../app/planner-app.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /broadcast\.request_id === initialRequest\.id[\s\S]*?broadcast\.status !== "cancelled"/,
+  );
+  assert.match(source, /setSendToLine\(Boolean\(nextLineBroadcast\)\)/);
+  assert.match(source, /Konfigurasi LINE tersimpan/);
+  assert.match(source, /Pengumuman dijadwalkan/);
+  assert.match(source, /Pengingat dijadwalkan/);
+});
+
+test("completed LINE unavailability broadcasts are deleted after every configured message is sent", async () => {
+  const source = await readFile(
+    new URL(
+      "../supabase/functions/send-line-reminders/index.ts",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /announcementSent && \(!broadcast\.reminder_at \|\| reminderSent\) && !broadcastFailed/,
+  );
+  assert.match(
+    source,
+    /from\("line_unavailability_broadcasts"\)[\s\S]*?\.delete\(\)[\s\S]*?\.eq\("id", broadcast\.id\)/,
+  );
+  assert.doesNotMatch(
+    source,
+    /update\(\{ status: "completed"/,
+  );
+});
+
 test("schedule sharing no longer references a creator column", async () => {
   const migration = await readFile(
     new URL(
