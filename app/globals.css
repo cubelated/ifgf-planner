@@ -3584,6 +3584,21 @@ a:focus-visible {
   gap: 10px;
 }
 
+.monthly-absence-title .icon-button {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.submission-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.dialog-action-spacer {
+  flex: 1 1 auto;
+}
+
 .monthly-absence-title h3 {
   margin: 0;
   font-size: 14px;
