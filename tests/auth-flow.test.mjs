@@ -8,21 +8,18 @@ const plannerSource = await readFile(
 );
 
 test("uses password sign-in as the default authentication mode", () => {
+  assert.match(plannerSource, /auth\.signInWithPassword\(\{/);
+  assert.match(plannerSource, /autoComplete="current-password"/);
+});
+
+test("disables account creation and removes passwordless email-link login", () => {
   assert.match(
     plannerSource,
-    /useState<\s*"sign-in" \| "sign-up" \| "magic-link"\s*>\("sign-in"\)/,
+    /<button\s+type="button"\s+disabled\s+aria-disabled="true"[\s\S]*?Buat akun\s*<\/button>/,
   );
-  assert.match(plannerSource, /auth\.signInWithPassword\(\{/);
-});
-
-test("supports password account creation with an email confirmation redirect", () => {
-  assert.match(plannerSource, /auth\.signUp\(\{/);
-  assert.match(plannerSource, /emailRedirectTo:\s*window\.location\.origin/);
-});
-
-test("keeps magic-link sign-in from creating accounts", () => {
-  assert.match(plannerSource, /auth\.signInWithOtp\(\{/);
-  assert.match(plannerSource, /shouldCreateUser:\s*false/);
+  assert.doesNotMatch(plannerSource, /auth\.signUp\(/);
+  assert.doesNotMatch(plannerSource, /auth\.signInWithOtp\(/);
+  assert.doesNotMatch(plannerSource, /magic-link/);
 });
 
 test("lets signed-in users change their password without an email flow", () => {

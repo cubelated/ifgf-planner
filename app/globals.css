@@ -1122,6 +1122,11 @@ a:focus-visible {
   box-shadow: 0 1px 4px rgb(19 44 62 / 0.1);
 }
 
+.auth-mode-tabs button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .login-form label,
 .modal-card label,
 .reason-field {
@@ -1166,53 +1171,6 @@ a:focus-visible {
   margin: 8px 0 0;
   color: #a23e34;
   font-size: 11px;
-}
-
-.login-success {
-  margin-top: 28px;
-  padding: 16px;
-  display: grid;
-  grid-template-columns: 42px 1fr;
-  gap: 12px;
-  border: 1px solid #bfe0d6;
-  border-radius: 12px;
-  background: #f1faf7;
-}
-
-.login-success > span {
-  width: 40px;
-  height: 40px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--teal-100);
-  color: var(--teal-700);
-}
-
-.login-success strong {
-  font-size: 13px;
-}
-
-.login-success p {
-  margin: 4px 0 0;
-  color: var(--ink-500);
-  font-size: 11px;
-}
-
-.magic-link-toggle {
-  width: 100%;
-  margin-top: 18px;
-  border: 0;
-  padding: 4px;
-  background: transparent;
-  color: var(--blue-700);
-  font-size: 11px;
-  font-weight: 650;
-  text-align: center;
-}
-
-.magic-link-toggle:hover {
-  text-decoration: underline;
 }
 
 .demo-entry {

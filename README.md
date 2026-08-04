@@ -16,9 +16,9 @@ Indonesian-first volunteer scheduling web app for IFGF church teams. Application
 - Scheduled unavailability-form announcements with an expiry-day reminder
 - Schedule-image export and LINE group broadcast
 - Configurable volunteer reminders (24 hours before by default)
-- Supabase email/password account creation and sign-in by default
+- Supabase email/password sign-in for existing accounts
+- Account creation is temporarily disabled in the login UI
 - In-session password changes with current-password verification and no email confirmation
-- Optional passwordless email-link sign-in for existing users
 - Indonesian localization foundation for future English and Traditional Chinese support
 
 ## Stack
