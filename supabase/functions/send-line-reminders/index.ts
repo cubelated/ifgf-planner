@@ -226,7 +226,13 @@ async function processFormBroadcasts() {
     }
 
     if (announcementSent && (!broadcast.reminder_at || reminderSent) && !broadcastFailed) {
-      await supabase.from("line_unavailability_broadcasts").update({ status: "completed", updated_at: new Date().toISOString() }).eq("id", broadcast.id);
+      const { error: deleteError } = await supabase
+        .from("line_unavailability_broadcasts")
+        .delete()
+        .eq("id", broadcast.id);
+      if (deleteError) {
+        throw new Error(`Could not remove completed form broadcast: ${deleteError.message}`);
+      }
     }
   }
   return { due, sent, failed, skipped };
