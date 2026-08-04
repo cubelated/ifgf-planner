@@ -97,17 +97,6 @@ where announce_at is null;
 alter table public.line_unavailability_broadcasts
   alter column announce_at set not null;
 
-alter table public.line_unavailability_broadcasts
-  add column if not exists created_by uuid
-    default auth.uid()
-    references auth.users(id) on delete cascade;
-
-alter table public.line_unavailability_broadcasts
-  alter column created_by set default auth.uid();
-
-alter table public.line_unavailability_broadcasts
-  alter column created_by set not null;
-
 do $$
 begin
   if not exists (
