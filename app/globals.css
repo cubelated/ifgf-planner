@@ -3399,6 +3399,27 @@ a:focus-visible {
   border-top: 0;
 }
 
+.line-schedule-saved {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 4px;
+  padding: 11px 12px;
+  border: 1px solid #a7dfbd;
+  border-radius: 10px;
+  background: #eaf9ef;
+  color: #176b3a;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.line-schedule-saved strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #125b32;
+  font-size: 12px;
+}
+
 @media (max-width: 620px) {
   .line-reminder-fields,
   .line-schedule-fields {
