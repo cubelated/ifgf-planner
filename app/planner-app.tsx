@@ -1993,6 +1993,13 @@ function Unavailability({
   const initialRequest = data.unavailabilityRequests.find(
     (request) => request.request_month === `${initialMonth}-01`,
   );
+  const initialLineBroadcast = initialRequest
+    ? data.lineUnavailabilityBroadcasts.find(
+        (broadcast) =>
+          broadcast.request_id === initialRequest.id &&
+          broadcast.status !== "cancelled",
+      )
+    : undefined;
   const [month, setMonth] = useState(initialMonth);
   const [expiresOn, setExpiresOn] = useState(() =>
     initialRequest?.expires_on ?? defaultUnavailabilityExpiry(initialMonth),
@@ -2002,13 +2009,29 @@ function Unavailability({
   const connectedEvents = data.events.filter((event) =>
     data.lineConnections.some((connection) => connection.event_id === event.id),
   );
-  const [sendToLine, setSendToLine] = useState(false);
-  const [lineEventId, setLineEventId] = useState(connectedEvents[0]?.id ?? "");
-  const [announceAt, setAnnounceAt] = useState(() =>
-    nextQuarterHour(data.organization.timezone),
+  const [sendToLine, setSendToLine] = useState(Boolean(initialLineBroadcast));
+  const [lineEventId, setLineEventId] = useState(
+    initialLineBroadcast?.event_id ?? connectedEvents[0]?.id ?? "",
   );
-  const [remindOnLastDay, setRemindOnLastDay] = useState(true);
-  const [reminderAt, setReminderAt] = useState(() => `${expiresOn}T09:00`);
+  const [announceAt, setAnnounceAt] = useState(() =>
+    initialLineBroadcast
+      ? dateTimeLocalInTimeZone(
+          new Date(initialLineBroadcast.announce_at),
+          data.organization.timezone,
+        )
+      : nextQuarterHour(data.organization.timezone),
+  );
+  const [remindOnLastDay, setRemindOnLastDay] = useState(
+    initialLineBroadcast ? Boolean(initialLineBroadcast.reminder_at) : true,
+  );
+  const [reminderAt, setReminderAt] = useState(() =>
+    initialLineBroadcast?.reminder_at
+      ? dateTimeLocalInTimeZone(
+          new Date(initialLineBroadcast.reminder_at),
+          data.organization.timezone,
+        )
+      : `${expiresOn}T09:00`,
+  );
 
   useEffect(() => {
     if (!initialRequest?.share_token) return;
@@ -2032,6 +2055,13 @@ function Unavailability({
   const currentRequest = data.unavailabilityRequests.find(
     (request) => request.request_month === `${month}-01`,
   );
+  const currentLineBroadcast = currentRequest
+    ? data.lineUnavailabilityBroadcasts.find(
+        (broadcast) =>
+          broadcast.request_id === currentRequest.id &&
+          broadcast.status !== "cancelled",
+      )
+    : undefined;
   const requestClosedByStatus = Boolean(
     currentRequest && currentRequest.status !== "open",
   );
@@ -2046,7 +2076,7 @@ function Unavailability({
   const lineScheduleInvalid = sendToLine && (
     !lineEventId ||
     !announceAt ||
-    announceAt < nowLocal ||
+    (!currentLineBroadcast?.announced_at && announceAt < nowLocal) ||
     announceAt > latestLineTime ||
     (remindOnLastDay && (
       !reminderAt ||
@@ -2206,6 +2236,13 @@ function Unavailability({
                   const nextRequest = data.unavailabilityRequests.find(
                     (request) => request.request_month === `${nextMonth}-01`,
                   );
+                  const nextLineBroadcast = nextRequest
+                    ? data.lineUnavailabilityBroadcasts.find(
+                        (broadcast) =>
+                          broadcast.request_id === nextRequest.id &&
+                          broadcast.status !== "cancelled",
+                      )
+                    : undefined;
                   setMonth(nextMonth);
                   setExpiresOn(
                     nextRequest?.expires_on ??
@@ -2213,7 +2250,31 @@ function Unavailability({
                   );
                   const nextExpiry = nextRequest?.expires_on ??
                     defaultUnavailabilityExpiry(nextMonth);
-                  setReminderAt(`${nextExpiry}T09:00`);
+                  setSendToLine(Boolean(nextLineBroadcast));
+                  setLineEventId(
+                    nextLineBroadcast?.event_id ?? connectedEvents[0]?.id ?? "",
+                  );
+                  setAnnounceAt(
+                    nextLineBroadcast
+                      ? dateTimeLocalInTimeZone(
+                          new Date(nextLineBroadcast.announce_at),
+                          data.organization.timezone,
+                        )
+                      : nextQuarterHour(data.organization.timezone),
+                  );
+                  setRemindOnLastDay(
+                    nextLineBroadcast
+                      ? Boolean(nextLineBroadcast.reminder_at)
+                      : true,
+                  );
+                  setReminderAt(
+                    nextLineBroadcast?.reminder_at
+                      ? dateTimeLocalInTimeZone(
+                          new Date(nextLineBroadcast.reminder_at),
+                          data.organization.timezone,
+                        )
+                      : `${nextExpiry}T09:00`,
+                  );
                   setGeneratedLink(
                     nextRequest?.share_token
                       ? `${window.location.origin}/unavailability-form#token=${encodeURIComponent(nextRequest.share_token)}`
@@ -2301,6 +2362,25 @@ function Unavailability({
                       onChange={(event) => setReminderAt(event.target.value)}
                     />
                   </label>
+                ) : null}
+                {currentLineBroadcast ? (
+                  <div className="line-schedule-saved" role="status">
+                    <strong>
+                      <Check size={15} /> Konfigurasi LINE tersimpan
+                    </strong>
+                    <span>
+                      {currentLineBroadcast.announced_at
+                        ? `Pengumuman dikirim ${formatDate(currentLineBroadcast.announced_at, data.organization.timezone)} pukul ${formatTime(currentLineBroadcast.announced_at, data.organization.timezone)}.`
+                        : `Pengumuman dijadwalkan ${formatDate(currentLineBroadcast.announce_at, data.organization.timezone)} pukul ${formatTime(currentLineBroadcast.announce_at, data.organization.timezone)}.`}
+                    </span>
+                    <span>
+                      {!currentLineBroadcast.reminder_at
+                        ? "Pengingat hari terakhir tidak diaktifkan."
+                        : currentLineBroadcast.reminder_sent_at
+                          ? `Pengingat dikirim ${formatDate(currentLineBroadcast.reminder_sent_at, data.organization.timezone)} pukul ${formatTime(currentLineBroadcast.reminder_sent_at, data.organization.timezone)}.`
+                          : `Pengingat dijadwalkan ${formatDate(currentLineBroadcast.reminder_at, data.organization.timezone)} pukul ${formatTime(currentLineBroadcast.reminder_at, data.organization.timezone)}.`}
+                    </span>
+                  </div>
                 ) : null}
               </div>
             ) : null}
