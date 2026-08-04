@@ -84,12 +84,12 @@ begin
     organization_id,
     event_group_id,
     share_month,
-    token_hash,
+    token_hash
   ) values (
     target_organization_id,
     target_event_group_id,
     target_month,
-    encode(extensions.digest(share_token, 'sha256'), 'hex'),
+    encode(extensions.digest(share_token, 'sha256'), 'hex')
   )
   returning id into created_share_id;
 
