@@ -751,10 +751,6 @@ export async function scheduleUnavailabilityLineBroadcast(input: {
   reminderAt: string | null;
 }) {
   const supabase = getSupabaseBrowserClient();
-  const { data: userResult, error: userError } = await supabase.auth.getUser();
-  if (userError || !userResult.user) {
-    fail("Sesi pengguna tidak dapat diverifikasi.", userError);
-  }
   const { error: cancelError } = await supabase
     .from("line_unavailability_broadcasts")
     .update({ status: "cancelled", updated_at: new Date().toISOString() })
@@ -768,7 +764,6 @@ export async function scheduleUnavailabilityLineBroadcast(input: {
     share_url: input.shareUrl,
     announce_at: input.announceAt,
     reminder_at: input.reminderAt,
-    created_by: userResult.user.id,
   });
   if (error) fail("Pengiriman formulir ke LINE tidak dapat dijadwalkan.", error);
 }
