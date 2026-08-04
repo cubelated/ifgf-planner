@@ -189,15 +189,130 @@ export async function createServiceSection(input: {
   name: string;
   color?: string;
   sortOrder: number;
+  eventGroupIds: string[];
 }) {
   const supabase = getSupabaseBrowserClient();
-  const { error } = await supabase.from("service_sections").insert({
-    organization_id: input.organizationId,
-    name: input.name.trim(),
-    color: input.color ?? "blue",
-    sort_order: input.sortOrder,
-  });
+  const eventGroupIds = [...new Set(input.eventGroupIds)];
+  const { data, error } = await supabase
+    .from("service_sections")
+    .insert({
+      organization_id: input.organizationId,
+      name: input.name.trim(),
+      color: input.color ?? "blue",
+      sort_order: input.sortOrder,
+    })
+    .select("id")
+    .single();
   if (error) fail("Bagian pelayanan tidak dapat disimpan.", error);
+
+  if (!eventGroupIds.length) return;
+  const { error: requirementError } = await supabase
+    .from("staffing_requirements")
+    .insert(
+      eventGroupIds.map((eventGroupId) => ({
+        event_group_id: eventGroupId,
+        section_id: data.id,
+        needed_count: 1,
+      })),
+    );
+  if (requirementError) {
+    await supabase.from("service_sections").delete().eq("id", data.id);
+    fail("Kegiatan untuk bagian pelayanan tidak dapat disimpan.", requirementError);
+  }
+}
+
+export async function updateServiceSection(input: {
+  id: string;
+  organizationId: string;
+  name: string;
+  eventGroupIds: string[];
+}) {
+  const supabase = getSupabaseBrowserClient();
+  const nextEventGroupIds = new Set(input.eventGroupIds);
+  const { data: currentRequirements, error: requirementsError } = await supabase
+    .from("staffing_requirements")
+    .select("event_group_id")
+    .eq("section_id", input.id);
+  if (requirementsError) {
+    fail("Kegiatan bagian pelayanan tidak dapat diperiksa.", requirementsError);
+  }
+
+  const currentEventGroupIds = new Set(
+    (currentRequirements ?? []).map((requirement) => requirement.event_group_id),
+  );
+  const removedEventGroupIds = [...currentEventGroupIds].filter(
+    (eventGroupId) => !nextEventGroupIds.has(eventGroupId),
+  );
+  const addedEventGroupIds = [...nextEventGroupIds].filter(
+    (eventGroupId) => !currentEventGroupIds.has(eventGroupId),
+  );
+
+  if (removedEventGroupIds.length) {
+    const { data: occurrences, error: occurrencesError } = await supabase
+      .from("event_occurrences")
+      .select("id")
+      .in("event_group_id", removedEventGroupIds);
+    if (occurrencesError) {
+      fail("Jadwal kegiatan bagian pelayanan tidak dapat diperiksa.", occurrencesError);
+    }
+    const occurrenceIds = (occurrences ?? []).map((occurrence) => occurrence.id);
+    if (occurrenceIds.length) {
+      const { data: assignments, error: assignmentsError } = await supabase
+        .from("assignments")
+        .select("id")
+        .eq("section_id", input.id)
+        .in("occurrence_id", occurrenceIds)
+        .limit(1);
+      if (assignmentsError) {
+        fail("Penugasan bagian pelayanan tidak dapat diperiksa.", assignmentsError);
+      }
+      if (assignments?.length) {
+        throw new Error(
+          "Bagian ini masih memiliki penugasan pada kegiatan yang dihapus. Hapus penugasannya terlebih dahulu.",
+        );
+      }
+    }
+  }
+
+  const { error: updateError } = await supabase
+    .from("service_sections")
+    .update({ name: input.name.trim() })
+    .eq("id", input.id)
+    .eq("organization_id", input.organizationId);
+  if (updateError) fail("Bagian pelayanan tidak dapat diperbarui.", updateError);
+
+  if (removedEventGroupIds.length) {
+    const { error } = await supabase
+      .from("staffing_requirements")
+      .delete()
+      .eq("section_id", input.id)
+      .in("event_group_id", removedEventGroupIds);
+    if (error) fail("Kegiatan yang dihapus tidak dapat disimpan.", error);
+  }
+
+  if (addedEventGroupIds.length) {
+    const { error } = await supabase.from("staffing_requirements").insert(
+      addedEventGroupIds.map((eventGroupId) => ({
+        event_group_id: eventGroupId,
+        section_id: input.id,
+        needed_count: 1,
+      })),
+    );
+    if (error) fail("Kegiatan baru tidak dapat ditambahkan.", error);
+  }
+}
+
+export async function deleteServiceSection(input: {
+  id: string;
+  organizationId: string;
+}) {
+  const supabase = getSupabaseBrowserClient();
+  const { error } = await supabase
+    .from("service_sections")
+    .delete()
+    .eq("id", input.id)
+    .eq("organization_id", input.organizationId);
+  if (error) fail("Bagian pelayanan tidak dapat dihapus.", error);
 }
 
 export async function reorderServiceSections(input: {

@@ -8,7 +8,7 @@ import {
   PlannerData,
   ServiceSection,
 } from "@/lib/planner-data";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   assignmentsFor,
   coverageFor,
@@ -39,6 +39,43 @@ type ScheduleExportRow = {
   volunteerType: string;
   volunteerNames: string[];
 };
+
+type StoredScheduleFilters = {
+  eventGroupId: string;
+  month: string;
+};
+
+const SCHEDULE_FILTERS_STORAGE_PREFIX = "ifgf-planner:schedule-filters";
+
+function scheduleFiltersStorageKey(organizationId: string, userId: string) {
+  return `${SCHEDULE_FILTERS_STORAGE_PREFIX}:${organizationId}:${userId}`;
+}
+
+function readStoredScheduleFilters(
+  organizationId: string,
+  userId: string,
+): StoredScheduleFilters | null {
+  try {
+    const value = window.localStorage.getItem(
+      scheduleFiltersStorageKey(organizationId, userId),
+    );
+    if (!value) return null;
+    const filters = JSON.parse(value) as Partial<StoredScheduleFilters>;
+    if (
+      typeof filters.eventGroupId !== "string" ||
+      typeof filters.month !== "string" ||
+      !/^\d{4}-\d{2}$/.test(filters.month)
+    ) {
+      return null;
+    }
+    return {
+      eventGroupId: filters.eventGroupId,
+      month: filters.month,
+    };
+  } catch {
+    return null;
+  }
+}
 
 function safeExportFileName(value: string) {
   const normalized = value
@@ -262,12 +299,14 @@ function createScheduleImage(
 
 export default function Schedule({
   data,
+  userId,
   canManage,
   onAssign,
   onChanged,
   showToast,
 }: {
   data: PlannerData;
+  userId: string;
   canManage: boolean;
   onAssign: (target: {
     occurrence: EventOccurrence;
@@ -283,6 +322,7 @@ export default function Schedule({
   const [selectedMonth, setSelectedMonth] = useState(() =>
     defaultScheduleMonth(data, initialEventId),
   );
+  const [filtersRestored, setFiltersRestored] = useState(false);
   const [generating, setGenerating] = useState(false);
   const selectedEvent =
     data.events.find((event) => event.id === eventFilter) ?? null;
@@ -335,6 +375,47 @@ export default function Schedule({
       return volunteerNames.join(", ") || "Belum ditugaskan";
     }),
   }));
+
+  useEffect(() => {
+    const stored = readStoredScheduleFilters(data.organization.id, userId);
+    const restoredEventId = data.events.some(
+      (event) => event.id === stored?.eventGroupId,
+    )
+      ? stored!.eventGroupId
+      : initialEventId;
+    const restoredMonth =
+      stored?.eventGroupId === restoredEventId
+        ? stored.month
+        : defaultScheduleMonth(data, restoredEventId);
+    let cancelled = false;
+    window.queueMicrotask(() => {
+      if (cancelled) return;
+      setEventFilter(restoredEventId);
+      setSelectedMonth(restoredMonth);
+      setFiltersRestored(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [data, initialEventId, userId]);
+
+  useEffect(() => {
+    if (!filtersRestored) return;
+    try {
+      window.localStorage.setItem(
+        scheduleFiltersStorageKey(data.organization.id, userId),
+        JSON.stringify({ eventGroupId: eventFilter, month: selectedMonth }),
+      );
+    } catch {
+      // The schedule remains usable when browser storage is unavailable.
+    }
+  }, [
+    data.organization.id,
+    eventFilter,
+    filtersRestored,
+    selectedMonth,
+    userId,
+  ]);
 
   function selectEvent(eventGroupId: string) {
     setEventFilter(eventGroupId);
