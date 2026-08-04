@@ -706,7 +706,15 @@ export default function PlannerApp() {
           ) : null}
           {view === "settings" && canManage ? (
             <SettingsView
-              key={data.sections.map((section) => section.id).join("|")}
+              key={`${data.sections
+                .map((section) => `${section.id}:${section.updated_at}`)
+                .join("|")}::${data.requirements
+                .map(
+                  (requirement) =>
+                    `${requirement.event_group_id}:${requirement.section_id}:${requirement.needed_count}`,
+                )
+                .sort()
+                .join("|")}`}
               data={data}
               onChanged={changed}
             />
