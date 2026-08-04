@@ -61,7 +61,6 @@ Deno.serve(async (request: Request) => {
     const { error } = await supabaseAdmin.from("line_group_connection_codes").insert({
       event_id: eventId,
       code_hash: await sha256(connectionCode),
-      created_by: userData.user.id,
       expires_at: expiresAt,
     });
     if (error) throw new Error(`Kode tidak dapat disimpan: ${error.message}`);

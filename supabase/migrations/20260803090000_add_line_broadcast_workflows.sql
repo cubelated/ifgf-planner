@@ -9,7 +9,6 @@ create table public.line_unavailability_broadcasts (
     check (status in ('scheduled', 'completed', 'cancelled')),
   announced_at timestamptz,
   reminder_sent_at timestamptz,
-  created_by uuid not null references auth.users(id) on delete cascade,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   check (reminder_at is null or reminder_at >= announce_at)
@@ -23,9 +22,6 @@ create index line_unavailability_broadcasts_request_id_idx
 
 create index line_unavailability_broadcasts_event_id_idx
   on public.line_unavailability_broadcasts (event_id);
-
-create index line_unavailability_broadcasts_created_by_idx
-  on public.line_unavailability_broadcasts (created_by);
 
 alter table public.line_unavailability_broadcasts enable row level security;
 
@@ -54,8 +50,7 @@ on public.line_unavailability_broadcasts
 for insert
 to authenticated
 with check (
-  created_by = (select auth.uid())
-  and exists (
+  exists (
     select 1
     from public.event_groups event_group
     join public.unavailability_requests request

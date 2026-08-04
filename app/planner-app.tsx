@@ -2118,7 +2118,6 @@ function Unavailability({
           reminderAt: remindOnLastDay
             ? zonedDateTimeToIso(reminderAt, data.organization.timezone)
             : null,
-          createdBy: data.user.id,
         });
       }
       setGeneratedLink(link);
@@ -2583,7 +2582,6 @@ function LineReminderCard({
         reminderMinutesBefore: reminderMinutes,
         arrivalMinutesBefore: arrivalMinutes,
         customMessage: customMessage.trim() || null,
-        createdBy: userId,
       });
       await onChanged(`Pengingat LINE ${event.name} berhasil disimpan.`);
     } catch (error) {

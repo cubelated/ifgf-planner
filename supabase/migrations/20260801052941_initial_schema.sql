@@ -16,7 +16,6 @@ create table public.organizations (
   name text not null,
   slug text not null unique,
   timezone text not null default 'Asia/Taipei',
-  created_by uuid not null references auth.users(id),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -70,7 +69,6 @@ create table public.event_groups (
     check (recurrence_pattern in ('every_week', 'weeks_1_3', 'weeks_2_4', 'except_5', 'custom')),
   week_occurrences smallint[] not null default array[1, 2, 3, 4, 5]::smallint[],
   is_active boolean not null default true,
-  created_by uuid not null references auth.users(id),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (organization_id, name)
@@ -118,23 +116,9 @@ create table public.unavailability (
   unique (volunteer_id, occurrence_id)
 );
 
-create table public.schedule_versions (
-  id uuid primary key default gen_random_uuid(),
-  organization_id uuid not null references public.organizations(id) on delete cascade,
-  period_start date not null,
-  period_end date not null,
-  status text not null default 'draft' check (status in ('draft', 'published', 'archived')),
-  published_at timestamptz,
-  created_by uuid not null references auth.users(id),
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  check (period_end >= period_start)
-);
-
 create table public.assignments (
   id uuid primary key default gen_random_uuid(),
   organization_id uuid not null references public.organizations(id) on delete cascade,
-  schedule_version_id uuid references public.schedule_versions(id) on delete set null,
   occurrence_id uuid not null references public.event_occurrences(id) on delete cascade,
   section_id uuid not null references public.service_sections(id) on delete cascade,
   volunteer_id uuid not null references public.volunteers(id) on delete cascade,
@@ -156,21 +140,13 @@ create index unavailability_org_date_idx on public.unavailability(organization_i
 create index assignments_occurrence_idx on public.assignments(occurrence_id);
 create index assignments_volunteer_idx on public.assignments(volunteer_id);
 create index assignments_organization_idx on public.assignments(organization_id);
-create index assignments_schedule_version_idx on public.assignments(schedule_version_id)
-  where schedule_version_id is not null;
 create index assignments_section_idx on public.assignments(section_id);
 create unique index assignments_occurrence_volunteer_unique
   on public.assignments(occurrence_id, volunteer_id);
 create index event_group_volunteers_volunteer_idx on public.event_group_volunteers(volunteer_id);
-create index event_groups_created_by_idx on public.event_groups(created_by);
-create index organizations_created_by_idx on public.organizations(created_by);
-create index schedule_versions_created_by_idx on public.schedule_versions(created_by);
-create index schedule_versions_organization_idx on public.schedule_versions(organization_id);
 create index staffing_requirements_section_idx on public.staffing_requirements(section_id);
 create index unavailability_occurrence_idx on public.unavailability(occurrence_id);
 create index volunteer_eligibility_section_idx on public.volunteer_section_eligibility(section_id);
-create unique index schedule_versions_period_unique
-  on public.schedule_versions(organization_id, period_start, period_end);
 
 create or replace function private.is_org_member(target_organization_id uuid)
 returns boolean
@@ -236,8 +212,6 @@ for each row execute function public.set_updated_at();
 create trigger event_occurrences_set_updated_at before update on public.event_occurrences
 for each row execute function public.set_updated_at();
 create trigger unavailability_set_updated_at before update on public.unavailability
-for each row execute function public.set_updated_at();
-create trigger schedule_versions_set_updated_at before update on public.schedule_versions
 for each row execute function public.set_updated_at();
 create trigger assignments_set_updated_at before update on public.assignments
 for each row execute function public.set_updated_at();
@@ -400,8 +374,8 @@ with first_user as (
   order by created_at
   limit 1
 )
-insert into public.organizations (name, slug, timezone, created_by)
-select 'IFGF Planner', 'ifgf-planner', 'Asia/Taipei', first_user.id
+insert into public.organizations (name, slug, timezone)
+select 'IFGF Planner', 'ifgf-planner', 'Asia/Taipei'
 from first_user
 on conflict (slug) do nothing;
 
@@ -448,7 +422,6 @@ alter table public.event_group_volunteers enable row level security;
 alter table public.staffing_requirements enable row level security;
 alter table public.event_occurrences enable row level security;
 alter table public.unavailability enable row level security;
-alter table public.schedule_versions enable row level security;
 alter table public.assignments enable row level security;
 
 create policy profiles_select on public.profiles for select to authenticated
@@ -458,9 +431,7 @@ using (id = (select auth.uid()))
 with check (id = (select auth.uid()));
 
 create policy organizations_select on public.organizations for select to authenticated
-using (created_by = (select auth.uid()) or private.is_org_member(id));
-create policy organizations_insert on public.organizations for insert to authenticated
-with check (created_by = (select auth.uid()));
+using (private.is_org_member(id));
 create policy organizations_update on public.organizations for update to authenticated
 using (private.has_org_role(id, array['owner', 'coordinator']))
 with check (private.has_org_role(id, array['owner', 'coordinator']));
@@ -472,15 +443,6 @@ using (private.is_org_member(organization_id));
 create policy organization_members_insert on public.organization_members for insert to authenticated
 with check (
   private.has_org_role(organization_id, array['owner', 'coordinator'])
-  or (
-    user_id = (select auth.uid())
-    and role = 'owner'
-    and exists (
-      select 1 from public.organizations organization
-      where organization.id = organization_id
-        and organization.created_by = (select auth.uid())
-    )
-  )
 );
 create policy organization_members_update on public.organization_members for update to authenticated
 using (private.has_org_role(organization_id, array['owner', 'coordinator']))
@@ -549,8 +511,7 @@ create policy event_groups_select on public.event_groups for select to authentic
 using (private.is_org_member(organization_id));
 create policy event_groups_insert on public.event_groups for insert to authenticated
 with check (
-  created_by = (select auth.uid())
-  and private.has_org_role(organization_id, array['owner', 'coordinator'])
+  private.has_org_role(organization_id, array['owner', 'coordinator'])
 );
 create policy event_groups_update on public.event_groups for update to authenticated
 using (private.has_org_role(organization_id, array['owner', 'coordinator']))
@@ -680,18 +641,6 @@ using (
   )
 );
 
-create policy schedule_versions_select on public.schedule_versions for select to authenticated
-using (private.is_org_member(organization_id));
-create policy schedule_versions_insert on public.schedule_versions for insert to authenticated
-with check (
-  created_by = (select auth.uid())
-  and private.has_org_role(organization_id, array['owner', 'coordinator'])
-);
-create policy schedule_versions_update on public.schedule_versions for update to authenticated
-using (private.has_org_role(organization_id, array['owner', 'coordinator']))
-with check (private.has_org_role(organization_id, array['owner', 'coordinator']));
-create policy schedule_versions_delete on public.schedule_versions for delete to authenticated
-using (private.has_org_role(organization_id, array['owner', 'coordinator']));
 
 create policy assignments_select on public.assignments for select to authenticated
 using (private.is_org_member(organization_id));
@@ -714,7 +663,6 @@ grant select, insert, update, delete on public.event_group_volunteers to authent
 grant select, insert, update, delete on public.staffing_requirements to authenticated;
 grant select, insert, update, delete on public.event_occurrences to authenticated;
 grant select, insert, update, delete on public.unavailability to authenticated;
-grant select, insert, update, delete on public.schedule_versions to authenticated;
 grant select, insert, update, delete on public.assignments to authenticated;
 
 revoke all on all tables in schema public from anon;

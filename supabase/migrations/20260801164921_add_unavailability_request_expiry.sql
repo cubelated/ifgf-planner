@@ -62,20 +62,17 @@ begin
     expires_on,
     token_hash,
     status,
-    created_by
   ) values (
     target_organization_id,
     target_month,
     target_expires_on,
     encode(extensions.digest(request_token, 'sha256'), 'hex'),
     'open',
-    (select auth.uid())
   )
   on conflict (organization_id, request_month) do update
   set expires_on = excluded.expires_on,
       token_hash = excluded.token_hash,
       status = 'open',
-      created_by = excluded.created_by,
       updated_at = now()
   returning id into created_request_id;
 

@@ -21,7 +21,6 @@ export type Database = {
           is_locked: boolean
           occurrence_id: string
           organization_id: string
-          schedule_version_id: string | null
           section_id: string
           status: string
           updated_at: string
@@ -33,7 +32,6 @@ export type Database = {
           is_locked?: boolean
           occurrence_id: string
           organization_id: string
-          schedule_version_id?: string | null
           section_id: string
           status?: string
           updated_at?: string
@@ -45,7 +43,6 @@ export type Database = {
           is_locked?: boolean
           occurrence_id?: string
           organization_id?: string
-          schedule_version_id?: string | null
           section_id?: string
           status?: string
           updated_at?: string
@@ -64,13 +61,6 @@ export type Database = {
             columns: ["organization_id"]
             isOneToOne: false
             referencedRelation: "organizations"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "assignments_schedule_version_id_fkey"
-            columns: ["schedule_version_id"]
-            isOneToOne: false
-            referencedRelation: "schedule_versions"
             referencedColumns: ["id"]
           },
           {
@@ -125,7 +115,6 @@ export type Database = {
       event_groups: {
         Row: {
           created_at: string
-          created_by: string
           duration_minutes: number
           id: string
           is_active: boolean
@@ -139,7 +128,6 @@ export type Database = {
         }
         Insert: {
           created_at?: string
-          created_by: string
           duration_minutes?: number
           id?: string
           is_active?: boolean
@@ -153,7 +141,6 @@ export type Database = {
         }
         Update: {
           created_at?: string
-          created_by?: string
           duration_minutes?: number
           id?: string
           is_active?: boolean
@@ -227,7 +214,6 @@ export type Database = {
         Row: {
           arrival_minutes_before: number
           created_at: string
-          created_by: string | null
           custom_message: string | null
           enabled: boolean
           event_id: string
@@ -238,7 +224,6 @@ export type Database = {
         Insert: {
           arrival_minutes_before?: number
           created_at?: string
-          created_by?: string | null
           custom_message?: string | null
           enabled?: boolean
           event_id: string
@@ -249,7 +234,6 @@ export type Database = {
         Update: {
           arrival_minutes_before?: number
           created_at?: string
-          created_by?: string | null
           custom_message?: string | null
           enabled?: boolean
           event_id?: string
@@ -307,7 +291,6 @@ export type Database = {
           announce_at: string
           announced_at: string | null
           created_at: string
-          created_by: string
           event_id: string
           id: string
           reminder_at: string | null
@@ -321,7 +304,6 @@ export type Database = {
           announce_at: string
           announced_at?: string | null
           created_at?: string
-          created_by: string
           event_id: string
           id?: string
           reminder_at?: string | null
@@ -335,7 +317,6 @@ export type Database = {
           announce_at?: string
           announced_at?: string | null
           created_at?: string
-          created_by?: string
           event_id?: string
           id?: string
           reminder_at?: string | null
@@ -404,7 +385,6 @@ export type Database = {
       organizations: {
         Row: {
           created_at: string
-          created_by: string
           id: string
           name: string
           slug: string
@@ -413,7 +393,6 @@ export type Database = {
         }
         Insert: {
           created_at?: string
-          created_by: string
           id?: string
           name: string
           slug: string
@@ -422,7 +401,6 @@ export type Database = {
         }
         Update: {
           created_at?: string
-          created_by?: string
           id?: string
           name?: string
           slug?: string
@@ -458,7 +436,6 @@ export type Database = {
       schedule_shares: {
         Row: {
           created_at: string
-          created_by: string
           event_group_id: string
           id: string
           organization_id: string
@@ -467,7 +444,6 @@ export type Database = {
         }
         Insert: {
           created_at?: string
-          created_by: string
           event_group_id: string
           id?: string
           organization_id: string
@@ -476,7 +452,6 @@ export type Database = {
         }
         Update: {
           created_at?: string
-          created_by?: string
           event_group_id?: string
           id?: string
           organization_id?: string
@@ -493,50 +468,6 @@ export type Database = {
           },
           {
             foreignKeyName: "schedule_shares_organization_id_fkey"
-            columns: ["organization_id"]
-            isOneToOne: false
-            referencedRelation: "organizations"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      schedule_versions: {
-        Row: {
-          created_at: string
-          created_by: string
-          id: string
-          organization_id: string
-          period_end: string
-          period_start: string
-          published_at: string | null
-          status: string
-          updated_at: string
-        }
-        Insert: {
-          created_at?: string
-          created_by: string
-          id?: string
-          organization_id: string
-          period_end: string
-          period_start: string
-          published_at?: string | null
-          status?: string
-          updated_at?: string
-        }
-        Update: {
-          created_at?: string
-          created_by?: string
-          id?: string
-          organization_id?: string
-          period_end?: string
-          period_start?: string
-          published_at?: string | null
-          status?: string
-          updated_at?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "schedule_versions_organization_id_fkey"
             columns: ["organization_id"]
             isOneToOne: false
             referencedRelation: "organizations"
@@ -695,7 +626,6 @@ export type Database = {
       unavailability_requests: {
         Row: {
           created_at: string
-          created_by: string
           expires_on: string
           id: string
           organization_id: string
@@ -706,7 +636,6 @@ export type Database = {
         }
         Insert: {
           created_at?: string
-          created_by: string
           expires_on: string
           id?: string
           organization_id: string
@@ -717,7 +646,6 @@ export type Database = {
         }
         Update: {
           created_at?: string
-          created_by?: string
           expires_on?: string
           id?: string
           organization_id?: string

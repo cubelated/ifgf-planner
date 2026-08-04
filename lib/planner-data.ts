@@ -23,7 +23,6 @@ export type StaffingRequirement = Tables<"staffing_requirements">;
 export type EventOccurrence = Tables<"event_occurrences">;
 export type Unavailability = Tables<"unavailability">;
 export type UnavailabilityRequest = Tables<"unavailability_requests">;
-export type ScheduleVersion = Tables<"schedule_versions">;
 export type Assignment = Tables<"assignments">;
 export type LineGroupConnection = Tables<"line_group_connections">;
 export type LineEventReminderSetting = Tables<"line_event_reminder_settings">;
@@ -45,7 +44,6 @@ export type PlannerData = {
   unavailability: Unavailability[];
   unavailabilityRequests: UnavailabilityRequest[];
   assignments: Assignment[];
-  scheduleVersions: ScheduleVersion[];
   lineConnections: LineGroupConnection[];
   lineReminderSettings: LineEventReminderSetting[];
   lineUnavailabilityBroadcasts: LineUnavailabilityBroadcast[];
@@ -78,7 +76,8 @@ export async function loadPlannerData(user: User): Promise<PlannerData> {
   const rangeEnd = new Date();
   rangeEnd.setDate(rangeEnd.getDate() + 550);
 
-  const [profileResult, organizationResult, sectionsResult, volunteersResult, eventsResult, occurrencesResult, absencesResult, requestsResult, assignmentsResult, versionsResult, lineConnectionsResult, lineReminderSettingsResult, lineBroadcastsResult] =
+  console.log(organizationId);
+  const [profileResult, organizationResult, sectionsResult, volunteersResult, eventsResult, occurrencesResult, absencesResult, requestsResult, assignmentsResult, lineConnectionsResult, lineReminderSettingsResult, lineBroadcastsResult] =
     await Promise.all([
       supabase.from("profiles").select("*").eq("id", user.id).single(),
       supabase.from("organizations").select("*").eq("id", organizationId).single(),
@@ -114,11 +113,6 @@ export async function loadPlannerData(user: User): Promise<PlannerData> {
         .eq("organization_id", organizationId)
         .order("created_at"),
       supabase
-        .from("schedule_versions")
-        .select("*")
-        .eq("organization_id", organizationId)
-        .order("created_at", { ascending: false }),
-      supabase
         .from("line_group_connections")
         .select("*")
         .eq("status", "active"),
@@ -141,7 +135,6 @@ export async function loadPlannerData(user: User): Promise<PlannerData> {
     absencesResult.error,
     requestsResult.error,
     assignmentsResult.error,
-    versionsResult.error,
     lineConnectionsResult.error,
     lineReminderSettingsResult.error,
     lineBroadcastsResult.error,
@@ -185,7 +178,6 @@ export async function loadPlannerData(user: User): Promise<PlannerData> {
     unavailability: absencesResult.data ?? [],
     unavailabilityRequests: requestsResult.data ?? [],
     assignments: assignmentsResult.data ?? [],
-    scheduleVersions: versionsResult.data ?? [],
     lineConnections: lineConnectionsResult.data ?? [],
     lineReminderSettings: lineReminderSettingsResult.data ?? [],
     lineUnavailabilityBroadcasts: lineBroadcastsResult.data ?? [],
@@ -337,7 +329,6 @@ export async function createEventGroup(input: CreateEventGroupInput) {
     .from("event_groups")
     .insert({
       organization_id: input.organizationId,
-      created_by: input.userId,
       name: input.name.trim(),
       weekday: input.weekday,
       start_time: input.startTime,
@@ -634,7 +625,6 @@ export async function scheduleUnavailabilityLineBroadcast(input: {
   shareUrl: string;
   announceAt: string;
   reminderAt: string | null;
-  createdBy: string;
 }) {
   const supabase = getSupabaseBrowserClient();
   const { error: cancelError } = await supabase
@@ -650,7 +640,6 @@ export async function scheduleUnavailabilityLineBroadcast(input: {
     share_url: input.shareUrl,
     announce_at: input.announceAt,
     reminder_at: input.reminderAt,
-    created_by: input.createdBy,
   });
   if (error) fail("Pengiriman formulir ke LINE tidak dapat dijadwalkan.", error);
 }
@@ -661,7 +650,6 @@ export async function saveLineReminderSetting(input: {
   reminderMinutesBefore: number;
   arrivalMinutesBefore: number;
   customMessage: string | null;
-  createdBy: string;
 }) {
   const supabase = getSupabaseBrowserClient();
   const { error } = await supabase.from("line_event_reminder_settings").upsert({
@@ -671,7 +659,6 @@ export async function saveLineReminderSetting(input: {
     arrival_minutes_before: input.arrivalMinutesBefore,
     custom_message: input.customMessage,
     require_published_schedule: true,
-    created_by: input.createdBy,
     updated_at: new Date().toISOString(),
   }, { onConflict: "event_id" });
   if (error) fail("Pengaturan pengingat LINE tidak dapat disimpan.", error);
@@ -869,39 +856,4 @@ export async function removeAssignment(assignmentId: string) {
   const supabase = getSupabaseBrowserClient();
   const { error } = await supabase.from("assignments").delete().eq("id", assignmentId);
   if (error) fail("Penugasan tidak dapat dihapus.", error);
-}
-
-export async function publishSchedule(input: {
-  organizationId: string;
-  userId: string;
-  occurrences: EventOccurrence[];
-}) {
-  if (!input.occurrences.length) throw new Error("Belum ada kegiatan yang dapat diterbitkan.");
-  const supabase = getSupabaseBrowserClient();
-  const dates = input.occurrences.map((occurrence) => occurrence.starts_at.slice(0, 10)).sort();
-  const periodStart = dates[0];
-  const periodEnd = dates[dates.length - 1];
-  const { data: version, error } = await supabase
-    .from("schedule_versions")
-    .upsert(
-      {
-        organization_id: input.organizationId,
-        period_start: periodStart,
-        period_end: periodEnd,
-        status: "published",
-        published_at: new Date().toISOString(),
-        created_by: input.userId,
-      },
-      { onConflict: "organization_id,period_start,period_end" },
-    )
-    .select("id")
-    .single();
-  if (error) fail("Jadwal tidak dapat diterbitkan.", error);
-
-  const occurrenceIds = input.occurrences.map((occurrence) => occurrence.id);
-  const { error: assignmentError } = await supabase
-    .from("assignments")
-    .update({ schedule_version_id: version.id })
-    .in("occurrence_id", occurrenceIds);
-  if (assignmentError) fail("Penugasan tidak dapat ditautkan ke jadwal terbit.", assignmentError);
 }

@@ -14,7 +14,6 @@ create table if not exists public.line_group_connection_codes (
   id uuid primary key default gen_random_uuid(),
   event_id uuid not null references public.event_groups(id) on delete cascade,
   code_hash text not null unique check (length(code_hash) = 64),
-  created_by uuid not null references auth.users(id) on delete cascade,
   expires_at timestamptz not null,
   used_at timestamptz,
   created_at timestamptz not null default now()
@@ -25,8 +24,6 @@ create index if not exists line_group_connection_codes_active_idx
   where used_at is null;
 create index if not exists line_group_connection_codes_event_id_idx
   on public.line_group_connection_codes (event_id);
-create index if not exists line_group_connection_codes_created_by_idx
-  on public.line_group_connection_codes (created_by);
 
 create table if not exists public.line_webhook_events (
   webhook_event_id text primary key,
@@ -67,13 +64,10 @@ create table if not exists public.line_event_reminder_settings (
     check (arrival_minutes_before between 0 and 240),
   custom_message text check (custom_message is null or char_length(custom_message) <= 500),
   require_published_schedule boolean not null default true,
-  created_by uuid references auth.users(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
-create index if not exists line_event_reminder_settings_created_by_idx
-  on public.line_event_reminder_settings (created_by);
 
 alter table public.line_group_connections enable row level security;
 alter table public.line_group_connection_codes enable row level security;

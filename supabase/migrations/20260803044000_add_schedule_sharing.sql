@@ -6,7 +6,6 @@ create table if not exists public.schedule_shares (
     share_month = date_trunc('month', share_month)::date
   ),
   token_hash text not null unique check (token_hash ~ '^[0-9a-f]{64}$'),
-  created_by uuid not null references auth.users(id),
   created_at timestamptz not null default now()
 );
 
@@ -26,8 +25,7 @@ drop policy if exists schedule_shares_insert on public.schedule_shares;
 create policy schedule_shares_insert
 on public.schedule_shares for insert to authenticated
 with check (
-  created_by = (select auth.uid())
-  and private.has_org_role(organization_id, array['owner', 'coordinator'])
+  private.has_org_role(organization_id, array['owner', 'coordinator'])
 );
 
 drop policy if exists schedule_shares_delete on public.schedule_shares;
@@ -87,13 +85,11 @@ begin
     event_group_id,
     share_month,
     token_hash,
-    created_by
   ) values (
     target_organization_id,
     target_event_group_id,
     target_month,
     encode(extensions.digest(share_token, 'sha256'), 'hex'),
-    (select auth.uid())
   )
   returning id into created_share_id;
 

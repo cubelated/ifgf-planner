@@ -4,7 +4,6 @@ create table public.unavailability_requests (
   request_month date not null,
   token_hash text not null unique,
   status text not null default 'open' check (status in ('open', 'closed')),
-  created_by uuid not null references auth.users(id),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (organization_id, request_month),
@@ -207,16 +206,14 @@ using (private.has_org_role(organization_id, array['owner', 'coordinator']));
 create policy unavailability_requests_insert
 on public.unavailability_requests for insert to authenticated
 with check (
-  created_by = (select auth.uid())
-  and private.has_org_role(organization_id, array['owner', 'coordinator'])
+  private.has_org_role(organization_id, array['owner', 'coordinator'])
 );
 
 create policy unavailability_requests_update
 on public.unavailability_requests for update to authenticated
 using (private.has_org_role(organization_id, array['owner', 'coordinator']))
 with check (
-  created_by = (select auth.uid())
-  and private.has_org_role(organization_id, array['owner', 'coordinator'])
+  private.has_org_role(organization_id, array['owner', 'coordinator'])
 );
 
 create policy unavailability_requests_delete
@@ -254,18 +251,15 @@ begin
     request_month,
     token_hash,
     status,
-    created_by
   ) values (
     target_organization_id,
     target_month,
     encode(extensions.digest(request_token, 'sha256'), 'hex'),
     'open',
-    (select auth.uid())
   )
   on conflict (organization_id, request_month) do update
   set token_hash = excluded.token_hash,
       status = 'open',
-      created_by = excluded.created_by,
       updated_at = now()
   returning id into created_request_id;
 
