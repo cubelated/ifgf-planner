@@ -2009,6 +2009,21 @@ function Unavailability({
   );
   const [remindOnLastDay, setRemindOnLastDay] = useState(true);
   const [reminderAt, setReminderAt] = useState(() => `${expiresOn}T09:00`);
+
+  useEffect(() => {
+    if (!initialRequest?.share_token) return;
+    const token = initialRequest.share_token;
+    let cancelled = false;
+    window.queueMicrotask(() => {
+      if (cancelled) return;
+      setGeneratedLink(
+        `${window.location.origin}/unavailability-form#token=${encodeURIComponent(token)}`,
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [initialRequest?.share_token]);
   const today = localDateKey(
     new Date().toISOString(),
     data.organization.timezone,
@@ -2112,16 +2127,16 @@ function Unavailability({
     setCreating(true);
     try {
       const token = createRequestToken();
-      const requestId = await createUnavailabilityRequest({
+      const request = await createUnavailabilityRequest({
         organizationId: data.organization.id,
         month,
         expiresOn,
         token,
       });
-      const link = `${window.location.origin}/unavailability-form#token=${encodeURIComponent(token)}`;
+      const link = `${window.location.origin}/unavailability-form#token=${encodeURIComponent(request.token)}`;
       if (sendToLine) {
         await scheduleUnavailabilityLineBroadcast({
-          requestId,
+          requestId: request.requestId,
           eventId: lineEventId,
           shareUrl: link,
           announceAt: zonedDateTimeToIso(announceAt, data.organization.timezone),
@@ -2131,17 +2146,8 @@ function Unavailability({
         });
       }
       setGeneratedLink(link);
-      let copied = false;
-      try {
-        await navigator.clipboard?.writeText(link);
-        copied = Boolean(navigator.clipboard);
-      } catch {
-        // The link remains visible so it can still be copied manually.
-      }
       await onChanged(
-        copied
-          ? `Tautan formulir ${formatMonthKey(month)} dibuat${sendToLine ? " dan dijadwalkan ke LINE" : ""}, lalu disalin.`
-          : `Tautan formulir ${formatMonthKey(month)} berhasil dibuat${sendToLine ? " dan dijadwalkan ke LINE" : ""}.`,
+        `Formulir ${formatMonthKey(month)} berhasil ${currentRequest ? "diperbarui" : "dibuat"}${sendToLine ? " dan dijadwalkan ke LINE" : ""}.`,
       );
     } catch (error) {
       showToast(
@@ -2208,7 +2214,11 @@ function Unavailability({
                   const nextExpiry = nextRequest?.expires_on ??
                     defaultUnavailabilityExpiry(nextMonth);
                   setReminderAt(`${nextExpiry}T09:00`);
-                  setGeneratedLink("");
+                  setGeneratedLink(
+                    nextRequest?.share_token
+                      ? `${window.location.origin}/unavailability-form#token=${encodeURIComponent(nextRequest.share_token)}`
+                      : "",
+                  );
                 }}
                 required
               />
@@ -2223,7 +2233,6 @@ function Unavailability({
                 onChange={(event) => {
                   setExpiresOn(event.target.value);
                   setReminderAt(`${event.target.value}T09:00`);
-                  setGeneratedLink("");
                 }}
               />
               <small>
@@ -2352,13 +2361,15 @@ function Unavailability({
             {creating ? (
               <LoaderCircle className="spin" size={17} />
             ) : (
-              <Copy size={17} />
+              currentRequest ? <RefreshCw size={17} /> : <Plus size={17} />
             )}
             {creating
-              ? "Membuat tautan..."
+              ? currentRequest
+                ? "Memperbarui..."
+                : "Membuat..."
               : currentRequest
-                ? "Buat ulang dan salin tautan"
-                : "Buat dan salin tautan"}
+                ? "Perbarui"
+                : "Buat"}
           </button>
 
           {generatedLink ? (
@@ -2386,9 +2397,9 @@ function Unavailability({
           ) : null}
           {currentRequest ? (
             <p className="link-rotation-note">
-              <ShieldCheck size={15} /> Membuat ulang tautan akan memperbarui
-              tanggal kedaluwarsa dan menonaktifkan tautan lama. Laporan yang
-              sudah masuk tetap tersimpan.
+              <ShieldCheck size={15} /> Memperbarui formulir akan mempertahankan
+              tautan yang sama. Tanggal kedaluwarsa, data formulir, dan jadwal
+              LINE akan memakai pengaturan terbaru.
             </p>
           ) : (
             <p className="link-rotation-note">
