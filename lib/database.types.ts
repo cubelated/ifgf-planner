@@ -753,6 +753,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      delete_unavailability_submission: {
+        Args: { submission_ids: string[] }
+        Returns: undefined
+      }
       create_schedule_share: {
         Args: {
           share_token: string
@@ -783,6 +787,16 @@ export type Database = {
         Args: {
           ordered_section_ids: string[]
           target_organization_id: string
+        }
+        Returns: undefined
+      }
+      update_unavailability_submission: {
+        Args: {
+          respondent_name: string
+          response_reason: string
+          submission_ids: string[]
+          target_volunteer_id: string | null
+          unavailable_dates: string[]
         }
         Returns: undefined
       }

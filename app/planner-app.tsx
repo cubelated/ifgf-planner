@@ -71,6 +71,7 @@ import { translate, type MessageKey } from "@/lib/i18n";
 import {
   assignVolunteer,
   createUnavailabilityRequest,
+  deleteUnavailabilitySubmission,
   createServiceSection,
   deleteEventGroup,
   generateEventMonth,
@@ -86,6 +87,7 @@ import {
   saveEventGroup,
   saveVolunteer,
   scheduleUnavailabilityLineBroadcast,
+  updateUnavailabilitySubmission,
   type EventGroup,
   type EventDeletionImpact,
   type EventOccurrence,
@@ -2007,6 +2009,13 @@ function Unavailability({
   );
   const [generatedLink, setGeneratedLink] = useState("");
   const [creating, setCreating] = useState(false);
+  const [submissionDialog, setSubmissionDialog] = useState<{
+    ids: string[];
+    name: string;
+    volunteerId: string | null;
+    dates: string[];
+    reason: string | null;
+  } | null>(null);
   const connectedEvents = data.events.filter((event) =>
     data.lineConnections.some((connection) => connection.event_id === event.id),
   );
@@ -2166,6 +2175,7 @@ function Unavailability({
     const groups = new Map<
       string,
       {
+        ids: Set<string>;
         name: string;
         volunteerId: string | null;
         dates: Set<string>;
@@ -2185,11 +2195,13 @@ function Unavailability({
         absence.volunteer_id ?? name.trim().toLocaleLowerCase("id-ID");
       const key = `${absence.request_id ?? "legacy"}:${identity}`;
       const group = groups.get(key) ?? {
+        ids: new Set<string>(),
         name,
         volunteerId: absence.volunteer_id,
         dates: new Set<string>(),
         reason: absence.reason,
       };
+      group.ids.add(absence.id);
       group.dates.add(absence.unavailable_date);
       if (!group.reason && absence.reason) group.reason = absence.reason;
       groups.set(key, group);
@@ -2215,7 +2227,12 @@ function Unavailability({
               );
             }).length
           : 0;
-        return { ...group, dates, affectedAssignments };
+        return {
+          ...group,
+          ids: Array.from(group.ids),
+          dates,
+          affectedAssignments,
+        };
       })
       .sort((left, right) => left.name.localeCompare(right.name, "id-ID"));
   }, [
@@ -2610,6 +2627,17 @@ function Unavailability({
                           ? "Pelayan terhubung"
                           : "Nama manual"}
                       </StatusPill>
+                      {group.ids.length ? (
+                        <button
+                          className="icon-button"
+                          type="button"
+                          onClick={() => setSubmissionDialog(group)}
+                          aria-label={`Edit jawaban ${group.name}`}
+                          title="Edit jawaban"
+                        >
+                          <Pencil size={16} />
+                        </button>
+                      ) : null}
                     </div>
                     <div className="absence-date-chips">
                       {group.dates.map((date) => (
@@ -2650,7 +2678,130 @@ function Unavailability({
           )}
         </div>
       </section>
+      {submissionDialog ? (
+        <UnavailabilitySubmissionDialog
+          data={data}
+          submission={submissionDialog}
+          onClose={() => setSubmissionDialog(null)}
+          onChanged={async (message) => {
+            setSubmissionDialog(null);
+            await onChanged(message);
+          }}
+        />
+      ) : null}
     </>
+  );
+}
+
+function UnavailabilitySubmissionDialog({
+  data,
+  submission,
+  onClose,
+  onChanged,
+}: {
+  data: PlannerData;
+  submission: {
+    ids: string[];
+    name: string;
+    volunteerId: string | null;
+    dates: string[];
+    reason: string | null;
+  };
+  onClose: () => void;
+  onChanged: (message: string) => Promise<void>;
+}) {
+  const [volunteerId, setVolunteerId] = useState(submission.volunteerId ?? "");
+  const [name, setName] = useState(submission.name);
+  const [dates, setDates] = useState(submission.dates.join(", "));
+  const [reason, setReason] = useState(submission.reason ?? "");
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState("");
+  const parsedDates = Array.from(
+    new Set(dates.split(",").map((value) => value.trim()).filter(Boolean)),
+  );
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setWorking(true);
+    setError("");
+    try {
+      await updateUnavailabilitySubmission({
+        submissionIds: submission.ids,
+        volunteerId: volunteerId || null,
+        respondentName: name,
+        unavailableDates: parsedDates,
+        reason,
+      });
+      await onChanged("Jawaban ketidakhadiran berhasil diperbarui.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Jawaban tidak dapat diperbarui.");
+      setWorking(false);
+    }
+  }
+
+  async function remove() {
+    if (!window.confirm(`Hapus seluruh jawaban ketidakhadiran ${submission.name}?`)) return;
+    setWorking(true);
+    setError("");
+    try {
+      await deleteUnavailabilitySubmission(submission.ids);
+      await onChanged("Jawaban ketidakhadiran berhasil dihapus.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Jawaban tidak dapat dihapus.");
+      setWorking(false);
+    }
+  }
+
+  return (
+    <Modal
+      title="Kelola jawaban ketidakhadiran"
+      eyebrow="JAWABAN FORMULIR"
+      description="Perbarui tanggal, hubungkan jawaban manual ke pelayan, atau hapus seluruh jawaban."
+      onClose={() => !working && onClose()}
+    >
+      <form onSubmit={save}>
+        <label>
+          Hubungkan ke pelayan <span>(opsional)</span>
+          <select value={volunteerId} onChange={(event) => {
+            const nextId = event.target.value;
+            setVolunteerId(nextId);
+            const volunteer = data.volunteers.find((item) => item.id === nextId);
+            if (volunteer) setName(volunteer.full_name);
+          }}>
+            <option value="">Tetap sebagai nama manual</option>
+            {data.volunteers.filter((item) => item.status === "active").map((volunteer) => (
+              <option key={volunteer.id} value={volunteer.id}>{volunteer.full_name}</option>
+            ))}
+          </select>
+        </label>
+        {!volunteerId ? (
+          <label>
+            Nama responden
+            <input value={name} onChange={(event) => setName(event.target.value)} minLength={2} maxLength={120} required />
+          </label>
+        ) : null}
+        <label>
+          Tanggal tidak tersedia
+          <input value={dates} onChange={(event) => setDates(event.target.value)} placeholder="2026-08-10, 2026-08-17" required />
+          <small>Pisahkan beberapa tanggal berformat YYYY-MM-DD dengan koma.</small>
+        </label>
+        <label>
+          Catatan <span>(opsional)</span>
+          <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={3} />
+        </label>
+        {error ? <p className="form-error" role="alert">{error}</p> : null}
+        <footer className="submission-dialog-actions">
+          <button className="button button-danger" type="button" onClick={remove} disabled={working}>
+            <Trash2 size={17} /> Hapus jawaban
+          </button>
+          <span className="dialog-action-spacer" />
+          <button className="button button-secondary" type="button" onClick={onClose} disabled={working}>Batal</button>
+          <button className="button button-primary" type="submit" disabled={working || !parsedDates.length}>
+            {working ? "Menyimpan..." : "Simpan perubahan"}
+          </button>
+        </footer>
+      </form>
+    </Modal>
   );
 }
 

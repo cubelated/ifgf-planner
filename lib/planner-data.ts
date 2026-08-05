@@ -768,6 +768,32 @@ export async function scheduleUnavailabilityLineBroadcast(input: {
   if (error) fail("Pengiriman formulir ke LINE tidak dapat dijadwalkan.", error);
 }
 
+export async function updateUnavailabilitySubmission(input: {
+  submissionIds: string[];
+  volunteerId: string | null;
+  respondentName: string;
+  unavailableDates: string[];
+  reason: string;
+}) {
+  const supabase = getSupabaseBrowserClient();
+  const { error } = await supabase.rpc("update_unavailability_submission", {
+    submission_ids: input.submissionIds,
+    target_volunteer_id: input.volunteerId,
+    respondent_name: input.respondentName,
+    unavailable_dates: input.unavailableDates,
+    response_reason: input.reason,
+  });
+  if (error) fail("Jawaban ketidakhadiran tidak dapat diperbarui.", error);
+}
+
+export async function deleteUnavailabilitySubmission(submissionIds: string[]) {
+  const supabase = getSupabaseBrowserClient();
+  const { error } = await supabase.rpc("delete_unavailability_submission", {
+    submission_ids: submissionIds,
+  });
+  if (error) fail("Jawaban ketidakhadiran tidak dapat dihapus.", error);
+}
+
 export async function saveLineReminderSetting(input: {
   eventId: string;
   enabled: boolean;
