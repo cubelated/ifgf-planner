@@ -3569,6 +3569,36 @@ a:focus-visible {
   border: 1px solid var(--line);
   border-radius: 12px;
   background: white;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.monthly-absence-item.unseen {
+  border-color: #e3ad55;
+  background: #fff9ed;
+  box-shadow: inset 3px 0 0 #d88a14;
+}
+
+.monthly-absence-item.seen {
+  border-color: #cfe0d8;
+  background: #f8fbf9;
+}
+
+.request-read-state {
+  padding: 4px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.request-read-state.unseen {
+  background: #f7dfb4;
+  color: #8a5200;
+}
+
+.request-read-state.seen {
+  background: #dcece4;
+  color: #39705a;
 }
 
 .monthly-absence-content {

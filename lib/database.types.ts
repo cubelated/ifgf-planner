@@ -623,6 +623,32 @@ export type Database = {
           },
         ]
       }
+      unavailability_read_states: {
+        Row: {
+          last_seen_at: string
+          organization_id: string
+          user_id: string
+        }
+        Insert: {
+          last_seen_at?: string
+          organization_id: string
+          user_id: string
+        }
+        Update: {
+          last_seen_at?: string
+          organization_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "unavailability_read_states_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       unavailability_requests: {
         Row: {
           created_at: string

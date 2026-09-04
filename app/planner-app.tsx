@@ -63,6 +63,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import type { SheetData } from "write-excel-file/browser";
@@ -78,6 +79,7 @@ import {
   generateOccurrenceDates,
   getEventDeletionImpact,
   loadPlannerData,
+  markUnavailabilitySeen,
   monthKeyAfter,
   monthKeyInTimeZone,
   publishSchedule,
@@ -387,6 +389,12 @@ export default function PlannerApp() {
     "idle" | "sending" | "error"
   >("idle");
   const [loginError, setLoginError] = useState("");
+  const [unavailabilityBadgeSeenAt, setUnavailabilityBadgeSeenAt] = useState<
+    string | null
+  >(null);
+  const [unavailabilityHighlightSeenAt, setUnavailabilityHighlightSeenAt] =
+    useState<string | null>(null);
+  const markedUnavailabilityViewRef = useRef<string | null>(null);
 
   const refresh = useCallback(async (targetUser: User) => {
     setDataState("loading");
@@ -428,6 +436,38 @@ export default function PlannerApp() {
     const timer = window.setTimeout(() => setToast(null), 3600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    if (view !== "unavailability") {
+      markedUnavailabilityViewRef.current = null;
+      return;
+    }
+    if (!data) return;
+    if (
+      data.membership.role !== "owner" &&
+      data.membership.role !== "coordinator"
+    )
+      return;
+
+    const viewKey = `${data.organization.id}:${data.user.id}`;
+    if (markedUnavailabilityViewRef.current === viewKey) return;
+    markedUnavailabilityViewRef.current = viewKey;
+
+    const previousSeenAt =
+      unavailabilityBadgeSeenAt ?? data.unavailabilityReadState?.last_seen_at ?? null;
+    setUnavailabilityHighlightSeenAt(previousSeenAt);
+    let cancelled = false;
+    void markUnavailabilitySeen(data.organization.id)
+      .then((seenAt) => {
+        if (!cancelled) setUnavailabilityBadgeSeenAt(seenAt);
+      })
+      .catch(() => {
+        // Keep navigation usable if saving the read receipt fails temporarily.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [data, unavailabilityBadgeSeenAt, view]);
 
   function showToast(message: string) {
     setToast(null);
@@ -502,13 +542,21 @@ export default function PlannerApp() {
         : "Pelayan";
 
   function navBadge(key: View) {
-    if (key === "schedule" && unfilled > 0) return unfilled;
-    if (
-      key === "unavailability" &&
-      data != null &&
-      data.unavailability.length > 0
-    )
-      return data.unavailability.length;
+    if (key === "unavailability" && view !== "unavailability") {
+      const seenAt =
+        unavailabilityBadgeSeenAt ?? data.unavailabilityReadState?.last_seen_at;
+      return new Set(
+        data.unavailability
+          .filter(
+            (absence) =>
+              absence.request_id && (!seenAt || absence.created_at > seenAt),
+          )
+          .map(
+            (absence) =>
+              `${absence.request_id}:${absence.volunteer_id ?? absence.submitted_name?.trim().toLocaleLowerCase("id-ID") ?? absence.id}`,
+          ),
+      ).size;
+    }
     return 0;
   }
 
@@ -696,6 +744,7 @@ export default function PlannerApp() {
           {view === "unavailability" && canManage ? (
             <Unavailability
               data={data}
+              seenAt={unavailabilityHighlightSeenAt}
               onChanged={changed}
               showToast={showToast}
             />
@@ -1984,10 +2033,12 @@ function Volunteers({
 
 function Unavailability({
   data,
+  seenAt,
   onChanged,
   showToast,
 }: {
   data: PlannerData;
+  seenAt: string | null;
   onChanged: (message: string) => Promise<void>;
   showToast: (message: string) => void;
 }) {
@@ -2232,6 +2283,10 @@ function Unavailability({
           ids: Array.from(group.ids),
           dates,
           affectedAssignments,
+          unseen: Array.from(group.ids).some((id) => {
+            const absence = monthAbsences.find((item) => item.id === id);
+            return Boolean(absence && (!seenAt || absence.created_at > seenAt));
+          }),
         };
       })
       .sort((left, right) => left.name.localeCompare(right.name, "id-ID"));
@@ -2241,6 +2296,7 @@ function Unavailability({
     data.organization.timezone,
     data.volunteers,
     monthAbsences,
+    seenAt,
   ]);
 
   async function createLink() {
@@ -2613,13 +2669,16 @@ function Unavailability({
             <div className="monthly-absence-list">
               {reportGroups.map((group, index) => (
                 <article
-                  className="monthly-absence-item"
+                  className={`monthly-absence-item ${group.unseen ? "unseen" : "seen"}`}
                   key={`${group.name}-${group.dates.join("-")}`}
                 >
                   <Avatar name={group.name} tone={index} />
                   <div className="monthly-absence-content">
                     <div className="monthly-absence-title">
                       <h3>{group.name}</h3>
+                      <span className={`request-read-state ${group.unseen ? "unseen" : "seen"}`}>
+                        {group.unseen ? "Baru" : "Dilihat"}
+                      </span>
                       <StatusPill
                         tone={group.volunteerId ? "ready" : "neutral"}
                       >

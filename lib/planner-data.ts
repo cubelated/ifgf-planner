@@ -23,6 +23,7 @@ export type StaffingRequirement = Tables<"staffing_requirements">;
 export type EventOccurrence = Tables<"event_occurrences">;
 export type Unavailability = Tables<"unavailability">;
 export type UnavailabilityRequest = Tables<"unavailability_requests">;
+export type UnavailabilityReadState = Tables<"unavailability_read_states">;
 export type Assignment = Tables<"assignments">;
 export type LineGroupConnection = Tables<"line_group_connections">;
 export type LineEventReminderSetting = Tables<"line_event_reminder_settings">;
@@ -43,6 +44,7 @@ export type PlannerData = {
   occurrences: EventOccurrence[];
   unavailability: Unavailability[];
   unavailabilityRequests: UnavailabilityRequest[];
+  unavailabilityReadState: UnavailabilityReadState | null;
   assignments: Assignment[];
   lineConnections: LineGroupConnection[];
   lineReminderSettings: LineEventReminderSetting[];
@@ -77,7 +79,7 @@ export async function loadPlannerData(user: User): Promise<PlannerData> {
   rangeEnd.setDate(rangeEnd.getDate() + 550);
 
   console.log(organizationId);
-  const [profileResult, organizationResult, sectionsResult, volunteersResult, eventsResult, occurrencesResult, absencesResult, requestsResult, assignmentsResult, lineConnectionsResult, lineReminderSettingsResult, lineBroadcastsResult] =
+  const [profileResult, organizationResult, sectionsResult, volunteersResult, eventsResult, occurrencesResult, absencesResult, requestsResult, readStateResult, assignmentsResult, lineConnectionsResult, lineReminderSettingsResult, lineBroadcastsResult] =
     await Promise.all([
       supabase.from("profiles").select("*").eq("id", user.id).single(),
       supabase.from("organizations").select("*").eq("id", organizationId).single(),
@@ -108,6 +110,12 @@ export async function loadPlannerData(user: User): Promise<PlannerData> {
         .eq("organization_id", organizationId)
         .order("request_month", { ascending: false }),
       supabase
+        .from("unavailability_read_states")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .eq("user_id", user.id)
+        .maybeSingle(),
+      supabase
         .from("assignments")
         .select("*")
         .eq("organization_id", organizationId)
@@ -134,6 +142,7 @@ export async function loadPlannerData(user: User): Promise<PlannerData> {
     occurrencesResult.error,
     absencesResult.error,
     requestsResult.error,
+    readStateResult.error,
     assignmentsResult.error,
     lineConnectionsResult.error,
     lineReminderSettingsResult.error,
@@ -177,11 +186,32 @@ export async function loadPlannerData(user: User): Promise<PlannerData> {
     occurrences: occurrencesResult.data ?? [],
     unavailability: absencesResult.data ?? [],
     unavailabilityRequests: requestsResult.data ?? [],
+    unavailabilityReadState: readStateResult.data,
     assignments: assignmentsResult.data ?? [],
     lineConnections: lineConnectionsResult.data ?? [],
     lineReminderSettings: lineReminderSettingsResult.data ?? [],
     lineUnavailabilityBroadcasts: lineBroadcastsResult.data ?? [],
   };
+}
+
+export async function markUnavailabilitySeen(organizationId: string) {
+  const supabase = getSupabaseBrowserClient();
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  if (authError || !authData.user) {
+    fail("Status ketidakhadiran tidak dapat diperbarui.", authError);
+  }
+
+  const seenAt = new Date().toISOString();
+  const { error } = await supabase.from("unavailability_read_states").upsert(
+    {
+      organization_id: organizationId,
+      user_id: authData.user.id,
+      last_seen_at: seenAt,
+    },
+    { onConflict: "organization_id,user_id" },
+  );
+  if (error) fail("Status ketidakhadiran tidak dapat diperbarui.", error);
+  return seenAt;
 }
 
 export async function createServiceSection(input: {
