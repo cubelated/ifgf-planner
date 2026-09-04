@@ -55,6 +55,24 @@ test("the form UI creates or updates before offering a separate copy action", as
   );
 });
 
+test("the shareable link follows the selected unavailability month", async () => {
+  const source = await readFile(
+    new URL("../app/planner-app.tsx", import.meta.url),
+    "utf8",
+  );
+  const synchronizationEffect = source.match(
+    /useEffect\(\(\) => \{\s*const selectedRequest = data\.unavailabilityRequests\.find\([\s\S]*?\}, \[data\.unavailabilityRequests, month\]\);/,
+  )?.[0] ?? "";
+
+  assert.match(
+    synchronizationEffect,
+    /request\.request_month === `\$\{month\}-01`/,
+  );
+  assert.match(synchronizationEffect, /selectedRequest\?\.share_token/);
+  assert.match(synchronizationEffect, /: ""/);
+  assert.doesNotMatch(synchronizationEffect, /initialRequest/);
+});
+
 test("LINE scheduling restores announce_at without storing a creator", async () => {
   const [migration, removalMigration, plannerData] = await Promise.all([
     readFile(
