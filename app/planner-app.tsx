@@ -2124,11 +2124,6 @@ function Unavailability({
       if (cancelled) return;
       setMonth(restoredMonth);
       setExpiresOn(restoredExpiry);
-      setGeneratedLink(
-        restoredRequest?.share_token
-          ? `${window.location.origin}/unavailability-form#token=${encodeURIComponent(restoredRequest.share_token)}`
-          : "",
-      );
       setSendToLine(Boolean(restoredLineBroadcast));
       setLineEventId(
         restoredLineBroadcast?.event_id ??
@@ -2167,19 +2162,23 @@ function Unavailability({
   }, [data, initialMonth, monthStorageKey]);
 
   useEffect(() => {
-    if (!initialRequest?.share_token) return;
-    const token = initialRequest.share_token;
+    const selectedRequest = data.unavailabilityRequests.find(
+      (request) => request.request_month === `${month}-01`,
+    );
+    const token = selectedRequest?.share_token;
     let cancelled = false;
     window.queueMicrotask(() => {
       if (cancelled) return;
       setGeneratedLink(
-        `${window.location.origin}/unavailability-form#token=${encodeURIComponent(token)}`,
+        token
+          ? `${window.location.origin}/unavailability-form#token=${encodeURIComponent(token)}`
+          : "",
       );
     });
     return () => {
       cancelled = true;
     };
-  }, [initialRequest?.share_token]);
+  }, [data.unavailabilityRequests, month]);
   const today = localDateKey(
     new Date().toISOString(),
     data.organization.timezone,
@@ -2425,11 +2424,6 @@ function Unavailability({
                           data.organization.timezone,
                         )
                       : `${nextExpiry}T09:00`,
-                  );
-                  setGeneratedLink(
-                    nextRequest?.share_token
-                      ? `${window.location.origin}/unavailability-form#token=${encodeURIComponent(nextRequest.share_token)}`
-                      : "",
                   );
                 }}
                 required
