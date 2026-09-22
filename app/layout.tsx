@@ -17,6 +17,11 @@ export const metadata: Metadata = {
   title: APP_CONFIG.name,
   description:
     "Perencanaan jadwal pelayanan, ketersediaan pelayan, dan komunikasi tim IFGF.",
+  icons: {
+    icon: [{ url: "/ifgf-favicon.png", type: "image/png" }],
+    shortcut: "/ifgf-favicon.png",
+    apple: "/ifgf-favicon.png",
+  },
   other: {
     "codex-preview": "development",
   },

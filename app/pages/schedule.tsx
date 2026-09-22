@@ -206,7 +206,12 @@ function createScheduleImage(
       cellPadding * 2,
   );
   const rowLayouts = rows.map((row) => {
-    const values = [row.volunteerType, ...row.volunteerNames];
+    const values = [
+      row.volunteerType,
+      ...row.volunteerNames.map((name) =>
+        name === "Belum ditugaskan" ? "" : name,
+      ),
+    ];
     const lines = values.map((value, index) =>
       wrapCanvasText(context, value, columnWidths[index] - cellPadding * 2),
     );
