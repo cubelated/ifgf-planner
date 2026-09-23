@@ -3621,6 +3621,59 @@ function VolunteerDialog({
   );
 }
 
+function sameDayOtherEventAssignments(
+  data: PlannerData,
+  target: { occurrence: EventOccurrence; section: ServiceSection },
+  occurrenceDate: string,
+) {
+  const occurrencesById = new Map(
+    data.occurrences.map((occurrence) => [occurrence.id, occurrence]),
+  );
+  const eventsById = new Map(data.events.map((event) => [event.id, event]));
+  const sectionsById = new Map(
+    data.sections.map((section) => [section.id, section]),
+  );
+  const conflicts = new Map<
+    string,
+    Map<string, { eventName: string; sectionNames: Set<string> }>
+  >();
+
+  for (const assignment of data.assignments) {
+    const occurrence = occurrencesById.get(assignment.occurrence_id);
+    if (
+      !occurrence ||
+      occurrence.event_group_id === target.occurrence.event_group_id ||
+      localDateKey(occurrence.starts_at, data.organization.timezone) !==
+        occurrenceDate
+    ) {
+      continue;
+    }
+
+    const volunteerConflicts =
+      conflicts.get(assignment.volunteer_id) ?? new Map();
+    const eventConflict = volunteerConflicts.get(occurrence.event_group_id) ?? {
+      eventName:
+        eventsById.get(occurrence.event_group_id)?.name ?? "kegiatan lain",
+      sectionNames: new Set<string>(),
+    };
+    const sectionName = sectionsById.get(assignment.section_id)?.name;
+    if (sectionName) eventConflict.sectionNames.add(sectionName);
+    volunteerConflicts.set(occurrence.event_group_id, eventConflict);
+    conflicts.set(assignment.volunteer_id, volunteerConflicts);
+  }
+
+  return new Map(
+    [...conflicts].map(([volunteerId, eventConflicts]) => [
+      volunteerId,
+      [...eventConflicts.values()].map(({ eventName, sectionNames }) =>
+        sectionNames.size
+          ? `${eventName} (${[...sectionNames].join(", ")})`
+          : eventName,
+      ),
+    ]),
+  );
+}
+
 function AssignmentDialog({
   data,
   target,
@@ -3647,6 +3700,11 @@ function AssignmentDialog({
   const occurrenceDate = localDateKey(
     target.occurrence.starts_at,
     data.organization.timezone,
+  );
+  const sameDayConflicts = sameDayOtherEventAssignments(
+    data,
+    target,
+    occurrenceDate,
   );
   const unavailable = new Set(
     data.unavailability
@@ -3805,10 +3863,19 @@ function AssignmentDialog({
           visibleCandidates.map((volunteer, index) => {
             const isGroupMember = groupMembers.has(volunteer.id);
             const otherSections = otherSectionNames(volunteer.id);
+            const sameDayConflict = sameDayConflicts.get(volunteer.id) ?? [];
+            const assignmentWarnings = [
+              ...(sameDayConflict.length
+                ? [`Hari yang sama: ${sameDayConflict.join("; ")}`]
+                : []),
+              ...(otherSections.length
+                ? [`Kegiatan ini: ${otherSections.join(", ")}`]
+                : []),
+            ];
             const className = [
               "candidate-button",
               !isGroupMember ? "candidate-add-group" : "",
-              otherSections.length ? "candidate-already-assigned" : "",
+              assignmentWarnings.length ? "candidate-already-assigned" : "",
             ]
               .filter(Boolean)
               .join(" ");
@@ -3823,12 +3890,11 @@ function AssignmentDialog({
                 <Avatar name={volunteer.full_name} tone={index} />
                 <span>
                   <strong>{volunteer.full_name}</strong>
-                  {otherSections.length ? (
+                  {assignmentWarnings.length ? (
                     <small className="candidate-warning">
                       <AlertCircle size={13} />
                       <span>
-                        Sudah bertugas: {otherSections.join(", ")} • tetap dapat
-                        ditambahkan
+                        {assignmentWarnings.join(" • ")} • tetap dapat ditambahkan
                       </span>
                     </small>
                   ) : (
