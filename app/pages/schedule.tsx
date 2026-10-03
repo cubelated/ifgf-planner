@@ -9,6 +9,16 @@ import {
   ServiceSection,
 } from "@/lib/planner-data";
 import { useEffect, useState } from "react";
+import type { CSSProperties } from "react";
+import {
+  DEFAULT_SCHEDULE_APPEARANCE,
+  parseScheduleAppearance,
+  ScheduleAppearance,
+  SCHEDULE_TABLE_DESIGN,
+  scheduleAppearanceStorageKey,
+  scheduleRowBackground,
+  selectScheduleExportRows,
+} from "@/lib/schedule-appearance";
 import {
   assignmentsFor,
   coverageFor,
@@ -31,11 +41,16 @@ import {
   Share2,
   CalendarDays,
   Users,
+  SlidersHorizontal,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 
 type ScheduleExportFormat = "xlsx" | "csv" | "png" | "png-line";
 
 type ScheduleExportRow = {
+  sectionId: string;
+  hasAssignments: boolean;
   volunteerType: string;
   volunteerNames: string[];
 };
@@ -181,6 +196,7 @@ function createScheduleImage(
   month: string,
   dates: string[],
   rows: ScheduleExportRow[],
+  appearance: ScheduleAppearance,
 ) {
   const canvas = document.createElement("canvas");
   const context = canvas.getContext("2d");
@@ -192,18 +208,20 @@ function createScheduleImage(
   const tableWidth = columnWidths.reduce((total, width) => total + width, 0);
   const canvasWidth = Math.max(1_000, tableWidth + horizontalPadding * 2);
   const tableTop = 142;
-  const lineHeight = 24;
-  const cellPadding = 16;
+  const lineHeight = SCHEDULE_TABLE_DESIGN.exportLineHeight;
+  const fontSize = SCHEDULE_TABLE_DESIGN.exportFontSize;
+  const paddingX = appearance.paddingHorizontal;
+  const paddingY = appearance.paddingVertical;
 
   canvas.width = canvasWidth;
-  context.font = "500 18px Arial, sans-serif";
-  const headerLines = ["Jenis pelayan", ...dates].map((value, index) =>
-    wrapCanvasText(context, value, columnWidths[index] - cellPadding * 2),
+  context.font = `700 ${fontSize}px Arial, sans-serif`;
+  const headerLines = ["Bagian pelayanan", ...dates].map((value, index) =>
+    wrapCanvasText(context, value, columnWidths[index] - paddingX * 2),
   );
   const headerHeight = Math.max(
-    58,
+    lineHeight + paddingY * 2,
     Math.max(...headerLines.map((lines) => lines.length)) * lineHeight +
-      cellPadding * 2,
+      paddingY * 2,
   );
   const rowLayouts = rows.map((row) => {
     const values = [
@@ -212,13 +230,14 @@ function createScheduleImage(
         name === "Belum ditugaskan" ? "" : name,
       ),
     ];
-    const lines = values.map((value, index) =>
-      wrapCanvasText(context, value, columnWidths[index] - cellPadding * 2),
-    );
+    const lines = values.map((value, index) => {
+      context.font = `${index === 0 ? "700" : "500"} ${fontSize}px Arial, sans-serif`;
+      return wrapCanvasText(context, value, columnWidths[index] - paddingX * 2);
+    });
     const height = Math.max(
-      58,
+      lineHeight + paddingY * 2,
       Math.max(...lines.map((item) => item.length)) * lineHeight +
-        cellPadding * 2,
+        paddingY * 2,
     );
     return { lines, height };
   });
@@ -251,21 +270,20 @@ function createScheduleImage(
     y: number,
     width: number,
     height: number,
-    options: { background: string; color: string; bold?: boolean },
+    options: { background: string; color: string; bold?: boolean; center?: boolean; header?: boolean },
   ) => {
     context.fillStyle = options.background;
     context.fillRect(x, y, width, height);
-    context.strokeStyle = "#dce4e8";
-    context.lineWidth = 1;
-    context.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1);
     context.fillStyle = options.color;
-    context.font = `${options.bold ? "700" : "500"} 18px Arial, sans-serif`;
+    context.font = `${options.bold ? "700" : "500"} ${fontSize}px Arial, sans-serif`;
+    context.textAlign = options.center ? "center" : "left";
+    const textTop = options.header ? (height - lines.length * lineHeight) / 2 : paddingY;
     lines.forEach((line, index) => {
       context.fillText(
         line,
-        x + cellPadding,
-        y + cellPadding + 18 + index * lineHeight,
-        width - cellPadding * 2,
+        options.center ? x + width / 2 : x + paddingX,
+        y + textTop + fontSize + index * lineHeight,
+        width - paddingX * 2,
       );
     });
   };
@@ -273,9 +291,11 @@ function createScheduleImage(
   let x = horizontalPadding;
   headerLines.forEach((lines, index) => {
     drawCell(lines, x, tableTop, columnWidths[index], headerHeight, {
-      background: "#17364a",
-      color: "#ffffff",
+      background: appearance.headerBackground,
+      color: appearance.headerText,
       bold: true,
+      center: index > 0,
+      header: true,
     });
     x += columnWidths[index];
   });
@@ -285,14 +305,67 @@ function createScheduleImage(
     let cellX = horizontalPadding;
     row.lines.forEach((lines, columnIndex) => {
       drawCell(lines, cellX, y, columnWidths[columnIndex], row.height, {
-        background: rowIndex % 2 === 0 ? "#ffffff" : "#f7fafb",
-        color: columnIndex === 0 ? "#273844" : "#31596e",
+        background: columnIndex === 0
+          ? appearance.columnBackground
+          : scheduleRowBackground(appearance, rowIndex),
+        color: columnIndex === 0 ? appearance.columnText : "#31596e",
         bold: columnIndex === 0,
       });
       cellX += columnWidths[columnIndex];
     });
     y += row.height;
   });
+
+  // Draw shared edges once, so adjacent cells do not create doubled borders.
+  const drawDivider = (
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+    color: string,
+    width: number,
+  ) => {
+    const offset = width % 2 === 1 ? 0.5 : 0;
+    context.beginPath();
+    context.strokeStyle = color;
+    context.lineWidth = width;
+    context.moveTo(startX + offset, startY + offset);
+    context.lineTo(endX + offset, endY + offset);
+    context.stroke();
+  };
+  const tableBottom = y;
+  const tableRight = horizontalPadding + tableWidth;
+  const headerBottom = tableTop + headerHeight;
+  let dividerX = horizontalPadding;
+  columnWidths.slice(0, -1).forEach((width, index) => {
+    dividerX += width;
+    if (index === 0) {
+      drawDivider(dividerX, tableTop, dividerX, tableBottom,
+        SCHEDULE_TABLE_DESIGN.dividerColor, SCHEDULE_TABLE_DESIGN.dividerWidth);
+    } else {
+      drawDivider(dividerX, tableTop, dividerX, headerBottom,
+        SCHEDULE_TABLE_DESIGN.headerGridColor, SCHEDULE_TABLE_DESIGN.gridWidth);
+      drawDivider(dividerX, headerBottom, dividerX, tableBottom,
+        SCHEDULE_TABLE_DESIGN.gridColor, SCHEDULE_TABLE_DESIGN.gridWidth);
+    }
+  });
+  drawDivider(horizontalPadding, headerBottom, tableRight, headerBottom,
+    SCHEDULE_TABLE_DESIGN.dividerColor, SCHEDULE_TABLE_DESIGN.dividerWidth);
+  let dividerY = headerBottom;
+  rowLayouts.slice(0, -1).forEach((row) => {
+    dividerY += row.height;
+    drawDivider(horizontalPadding, dividerY, tableRight, dividerY,
+      SCHEDULE_TABLE_DESIGN.gridColor, SCHEDULE_TABLE_DESIGN.gridWidth);
+  });
+  const outerInset = SCHEDULE_TABLE_DESIGN.dividerWidth / 2;
+  context.strokeStyle = SCHEDULE_TABLE_DESIGN.dividerColor;
+  context.lineWidth = SCHEDULE_TABLE_DESIGN.dividerWidth;
+  context.strokeRect(
+    horizontalPadding + outerInset,
+    tableTop + outerInset,
+    tableWidth - SCHEDULE_TABLE_DESIGN.dividerWidth,
+    tableBottom - tableTop - SCHEDULE_TABLE_DESIGN.dividerWidth,
+  );
 
   return new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((blob) => {
@@ -329,6 +402,52 @@ export default function Schedule({
   );
   const [filtersRestored, setFiltersRestored] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const appearanceKey = scheduleAppearanceStorageKey(data.organization.id, userId, eventFilter);
+  const [storedAppearance, setStoredAppearance] = useState<{
+    key: string;
+    value: ScheduleAppearance;
+  } | null>(null);
+  const appearance = storedAppearance?.key === appearanceKey
+    ? storedAppearance.value
+    : DEFAULT_SCHEDULE_APPEARANCE;
+
+  useEffect(() => {
+    let value = parseScheduleAppearance(null);
+    try {
+      value = parseScheduleAppearance(JSON.parse(window.localStorage.getItem(appearanceKey) ?? "null"));
+    } catch {
+      // Use defaults when storage is unavailable or contains invalid JSON.
+    }
+    let cancelled = false;
+    window.queueMicrotask(() => {
+      if (!cancelled) setStoredAppearance({ key: appearanceKey, value });
+    });
+    return () => { cancelled = true; };
+  }, [appearanceKey]);
+
+  function updateAppearance(value: ScheduleAppearance) {
+    const normalized = parseScheduleAppearance(value);
+    setStoredAppearance({ key: appearanceKey, value: normalized });
+    try {
+      window.localStorage.setItem(appearanceKey, JSON.stringify(normalized));
+    } catch {
+      // Customizations still apply during this visit without browser storage.
+    }
+  }
+
+  const boardStyle = {
+    "--schedule-grid-color": SCHEDULE_TABLE_DESIGN.gridColor,
+    "--schedule-divider-color": SCHEDULE_TABLE_DESIGN.dividerColor,
+    "--schedule-header-grid-color": SCHEDULE_TABLE_DESIGN.headerGridColor,
+    "--schedule-grid-width": `${SCHEDULE_TABLE_DESIGN.gridWidth}px`,
+    "--schedule-divider-width": `${SCHEDULE_TABLE_DESIGN.dividerWidth}px`,
+    "--schedule-header-background": appearance.headerBackground,
+    "--schedule-header-text": appearance.headerText,
+    "--schedule-column-background": appearance.columnBackground,
+    "--schedule-column-text": appearance.columnText,
+    "--schedule-padding-x": `${appearance.paddingHorizontal}px`,
+    "--schedule-padding-y": `${appearance.paddingVertical}px`,
+  } as CSSProperties;
   const selectedEvent =
     data.events.find((event) => event.id === eventFilter) ?? null;
   const eventOccurrences = data.occurrences.filter(
@@ -357,12 +476,32 @@ export default function Schedule({
   const sections = data.sections.filter((section) =>
     sectionIds.has(section.id),
   );
+  const visibleSections = sections.filter((section) =>
+    !appearance.hiddenSectionIds.includes(section.id),
+  );
+  const hiddenSections = sections.filter((section) =>
+    appearance.hiddenSectionIds.includes(section.id),
+  );
+
+  function setSectionVisible(sectionId: string, visible: boolean) {
+    updateAppearance({
+      ...appearance,
+      hiddenSectionIds: visible
+        ? appearance.hiddenSectionIds.filter((id) => id !== sectionId)
+        : [...appearance.hiddenSectionIds, sectionId],
+    });
+  }
   const exportDates = occurrences.map((occurrence) =>
     formatDate(occurrence.starts_at, data.organization.timezone, {
       weekday: "long",
     }),
   );
-  const exportRows: ScheduleExportRow[] = sections.map((section) => ({
+  const exportRows = selectScheduleExportRows(sections.map((section): ScheduleExportRow => ({
+    sectionId: section.id,
+    hasAssignments: occurrences.some((occurrence) =>
+      requirementsFor(data, occurrence).some((item) => item.section_id === section.id) &&
+      assignmentsFor(data, occurrence.id, section.id).length > 0,
+    ),
     volunteerType: section.name,
     volunteerNames: occurrences.map((occurrence) => {
       const requirement = requirementsFor(data, occurrence).find(
@@ -379,7 +518,7 @@ export default function Schedule({
         .filter((name): name is string => Boolean(name));
       return volunteerNames.join(", ") || "Belum ditugaskan";
     }),
-  }));
+  })), appearance);
 
   useEffect(() => {
     const stored = readStoredScheduleFilters(data.organization.id, userId);
@@ -521,6 +660,7 @@ export default function Schedule({
           monthLabel,
           exportDates,
           exportRows,
+          appearance,
         );
         downloadBlob(image, `${fileName}.png`);
         if (format === "png-line") {
@@ -543,10 +683,10 @@ export default function Schedule({
           await import("write-excel-file/browser");
         const headingStyle = {
           fontWeight: "bold" as const,
-          backgroundColor: "#17364A",
-          textColor: "#FFFFFF",
+          backgroundColor: appearance.headerBackground,
+          textColor: appearance.headerText,
           alignVertical: "center" as const,
-          height: 30,
+          height: 18 + appearance.paddingVertical * 1.5,
         };
         const columnCount = exportDates.length + 1;
         const emptyCells = exportDates.map(() => null);
@@ -580,13 +720,15 @@ export default function Schedule({
               ...headingStyle,
             })),
           ],
-          ...exportRows.map((row) => [
+          ...exportRows.map((row, rowIndex) => [
             {
               value: row.volunteerType,
               wrap: true,
               fontWeight: "bold" as const,
               alignVertical: "top" as const,
-              height: 38,
+              height: 20 + appearance.paddingVertical * 1.5,
+              backgroundColor: appearance.columnBackground,
+              textColor: appearance.columnText,
               borderColor: "#DCE4E8",
               borderStyle: "thin" as const,
             },
@@ -595,6 +737,7 @@ export default function Schedule({
               wrap: true,
               alignVertical: "top" as const,
               textColor: "#31596E",
+              backgroundColor: scheduleRowBackground(appearance, rowIndex),
               borderColor: "#DCE4E8",
               borderStyle: "thin" as const,
             })),
@@ -798,10 +941,39 @@ export default function Schedule({
           </button>
         ) : null}
       </div>
+      <ScheduleCustomization
+        appearance={appearance}
+        onChange={updateAppearance}
+        exportRowCount={exportRows.length}
+      />
       <section
         className="card schedule-board"
         aria-label="Papan jadwal pelayanan"
+        style={boardStyle}
       >
+        {hiddenSections.length ? (
+          <div className="schedule-hidden-rows" role="group" aria-label="Baris tersembunyi">
+            <span><EyeOff size={15} /> {hiddenSections.length} baris tersembunyi</span>
+            {hiddenSections.map((section) => (
+              <button
+                key={section.id}
+                type="button"
+                className="schedule-show-row"
+                aria-label={`Tampilkan baris ${section.name}`}
+                onClick={() => setSectionVisible(section.id, true)}
+              >
+                <Eye size={14} /> Tampilkan {section.name}
+              </button>
+            ))}
+            {hiddenSections.length > 1 ? (
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => updateAppearance({ ...appearance, hiddenSectionIds: [] })}
+              >Tampilkan semua</button>
+            ) : null}
+          </div>
+        ) : null}
         {!selectedEvent ? (
           <EmptyState
             icon={CalendarDays}
@@ -820,31 +992,39 @@ export default function Schedule({
             title="Belum ada kebutuhan tim"
             description="Tambahkan bagian pelayanan, lalu atur kebutuhan pelayan pada kegiatan ini."
           />
+        ) : !visibleSections.length ? (
+          <EmptyState
+            icon={Users}
+            title="Semua baris disembunyikan"
+            description="Gunakan tombol Tampilkan pada papan jadwal untuk memunculkan kembali baris."
+          />
         ) : (
           <>
             <div className="schedule-table-wrap">
               <table className="schedule-table">
                 <thead>
                   <tr>
-                    <th>Bagian pelayanan</th>
+                    <th scope="col">Bagian pelayanan</th>
                     {occurrences.map((occurrence) => (
-                      <th key={occurrence.id}>
+                      <th scope="col" key={occurrence.id}>
                         <strong>
                           {formatShortDate(
                             occurrence.starts_at,
                             data.organization.timezone,
                           )}
                         </strong>
-                        <span>{selectedEvent.name}</span>
                       </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {sections.map((section) => (
-                    <tr key={section.id}>
-                      <th>
-                        <strong>{section.name}</strong>
+                  {visibleSections.map((section, rowIndex) => (
+                    <tr key={section.id} style={{ backgroundColor: scheduleRowBackground(appearance, rowIndex) }}>
+                      <th scope="row">
+                        <div className="schedule-row-heading">
+                          <strong>{section.name}</strong>
+                          <HideScheduleRowButton section={section} onHide={() => setSectionVisible(section.id, false)} />
+                        </div>
                       </th>
                       {occurrences.map((occurrence) => (
                         <ScheduleCell
@@ -869,7 +1049,7 @@ export default function Schedule({
                     (requirement) => requirement.section_id,
                   ),
                 );
-                const occurrenceSections = data.sections.filter((section) =>
+                const occurrenceSections = visibleSections.filter((section) =>
                   requiredSectionIds.has(section.id),
                 );
                 return (
@@ -882,7 +1062,6 @@ export default function Schedule({
                             data.organization.timezone,
                           )}
                         </strong>
-                        <span>{selectedEvent.name}</span>
                       </div>
                       <StatusPill
                         tone={coverage.missing ? "attention" : "ready"}
@@ -893,8 +1072,15 @@ export default function Schedule({
                       </StatusPill>
                     </header>
                     {occurrenceSections.map((section) => (
-                      <div className="mobile-assignment" key={section.id}>
-                        <span>{section.name}</span>
+                      <div
+                        className="mobile-assignment"
+                        key={section.id}
+                        style={{ backgroundColor: scheduleRowBackground(appearance, visibleSections.indexOf(section)) }}
+                      >
+                        <span className="schedule-row-heading">
+                          <strong>{section.name}</strong>
+                          <HideScheduleRowButton section={section} onHide={() => setSectionVisible(section.id, false)} />
+                        </span>
                         <ScheduleCell
                           mobile
                           data={data}
@@ -927,6 +1113,118 @@ export default function Schedule({
         </div>
       </section>
     </>
+  );
+}
+
+function ScheduleCustomization({
+  appearance,
+  onChange,
+  exportRowCount,
+}: {
+  appearance: ScheduleAppearance;
+  onChange: (value: ScheduleAppearance) => void;
+  exportRowCount: number;
+}) {
+  const colorFields = [
+    ["headerBackground", "Latar baris judul"],
+    ["headerText", "Teks baris judul"],
+    ["columnBackground", "Latar kolom bagian"],
+    ["columnText", "Teks kolom bagian"],
+    ["rowBackground", "Latar baris"],
+    ["alternateRowBackground", "Latar baris selang-seling"],
+  ] as const;
+
+  return (
+    <details className="card schedule-customization">
+      <summary>
+        <SlidersHorizontal size={17} />
+        <span>Tampilan jadwal</span>
+        <small>Warna, jarak sel, dan ekspor</small>
+      </summary>
+      <div className="schedule-customization-body">
+        <p>Pengaturan berlaku untuk kegiatan ini, tampilan jadwal, dan hasil ekspor. Tersimpan di browser Anda.</p>
+        <fieldset>
+          <legend>Warna tabel</legend>
+          <div className="schedule-color-fields">
+            {colorFields.map(([key, label]) => (
+              <label key={key}>
+                <input
+                  type="color"
+                  value={appearance[key]}
+                  disabled={key === "alternateRowBackground" && !appearance.alternateRows}
+                  onChange={(event) => onChange({ ...appearance, [key]: event.target.value })}
+                />
+                <span>{label}</span>
+              </label>
+            ))}
+          </div>
+          <label className="schedule-option">
+            <input
+              type="checkbox"
+              checked={appearance.alternateRows}
+              onChange={(event) => onChange({ ...appearance, alternateRows: event.target.checked })}
+            />
+            Gunakan warna baris selang-seling
+          </label>
+        </fieldset>
+        <fieldset>
+          <legend>Jarak dalam sel</legend>
+          <div className="schedule-padding-fields">
+            {([
+              ["paddingHorizontal", "Kiri / kanan (px)"],
+              ["paddingVertical", "Atas / bawah (px)"],
+            ] as const).map(([key, label]) => (
+              <label key={key}>
+                <span>{label}</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={32}
+                  step={1}
+                  value={appearance[key]}
+                  onChange={(event) => onChange({ ...appearance, [key]: Number(event.target.value) })}
+                />
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Ekspor</legend>
+          <label className="schedule-option">
+            <input
+              type="checkbox"
+              checked={appearance.removeEmptyRowsOnExport}
+              onChange={(event) => onChange({ ...appearance, removeEmptyRowsOnExport: event.target.checked })}
+            />
+            Hapus baris kosong saat ekspor
+          </label>
+          <p>Baris kosong tidak memiliki pelayan yang ditugaskan pada seluruh tanggal bulan ini. Berlaku untuk PNG, LINE, Excel, dan CSV.</p>
+          <p role="status">{exportRowCount ? `${exportRowCount} baris akan diekspor.` : "Tidak ada baris untuk diekspor. Tampilkan baris atau nonaktifkan Hapus baris kosong."}</p>
+        </fieldset>
+        <button
+          type="button"
+          className="button button-secondary"
+          onClick={() => onChange(DEFAULT_SCHEDULE_APPEARANCE)}
+        >Atur ulang tampilan</button>
+      </div>
+    </details>
+  );
+}
+
+function HideScheduleRowButton({ section, onHide }: {
+  section: ServiceSection;
+  onHide: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="schedule-hide-row"
+      aria-label={`Sembunyikan baris ${section.name}`}
+      title={`Sembunyikan baris ${section.name}`}
+      onClick={onHide}
+    >
+      <EyeOff size={15} />
+    </button>
   );
 }
 
