@@ -143,26 +143,11 @@ test("the unavailability page persists the latest selected month per user and or
   assert.match(source, /\^\\d\{4\}-\\d\{2\}\$/);
 });
 
-test("completed LINE unavailability broadcasts are deleted after every configured message is sent", async () => {
-  const source = await readFile(
-    new URL(
-      "../supabase/functions/send-line-reminders/index.ts",
-      import.meta.url,
-    ),
-    "utf8",
-  );
-  assert.match(
-    source,
-    /announcementSent && \(!broadcast\.reminder_at \|\| reminderSent\) && !broadcastFailed/,
-  );
-  assert.match(
-    source,
-    /from\("line_unavailability_broadcasts"\)[\s\S]*?\.delete\(\)[\s\S]*?\.eq\("id", broadcast\.id\)/,
-  );
-  assert.doesNotMatch(
-    source,
-    /update\(\{ status: "completed"/,
-  );
+test("completed LINE broadcasts retain recent history for the retention job", async () => {
+  const source = await readFile(new URL("../supabase/functions/send-line-reminders/index.ts", import.meta.url), "utf8");
+  assert.match(source, /announcementSent && \(!broadcast\.reminder_at \|\| reminderSent\)/);
+  assert.match(source, /status: "completed"/);
+  assert.doesNotMatch(source, /\.from\("line_unavailability_broadcasts"\)\s*\.delete\(\)/);
 });
 
 test("schedule sharing no longer references a creator column", async () => {

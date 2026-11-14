@@ -76,3 +76,18 @@ Only use the Supabase publishable key in the browser. Never expose a secret or s
 - Add end-to-end and accessibility tests
 
 The UI intentionally keeps generated schedules in a draft state until a coordinator publishes them.
+
+## Storage retention and efficient reads
+
+- All schedules, assignments, unavailability responses, form requests, and schedule-share links remain in Postgres. Historical months load on demand.
+- The planner initially loads the current and next month. A session cache retains at most six months, including those two months. Assignment edits refresh the affected month and metadata; reference data is reused for up to 60 seconds.
+- `get_planner_month` and `get_planner_metadata` run with the caller's permissions and existing RLS. Month boundaries use the organization's timezone. JSON aggregation avoids the REST row limit for monthly assignments. The unread count covers all visible history, including unloaded months.
+- Daily at **03:05 Asia/Taipei**, completed cron executions older than 30 days are pruned in batches of 5,000.
+- Daily at **03:15 Asia/Taipei**, the housekeeping dispatcher checks for exported LINE images older than 30 days. It invokes `planner-maintenance` only when expired objects exist. Actual deletion uses the Storage API, at most 1,000 objects per call; failures or remaining batches retry on the next daily check.
+- On the first day of each Taiwan calendar month, housekeeping also removes connection codes expired for over 30 days and terminal message/broadcast records older than 90 days, in bounded batches. Retryable/in-progress deliveries and active form broadcasts are retained.
+- The minute-level LINE dispatcher invokes the reminder worker only for due work. A monthly schedule is considered published when a coordinator has created a share link for that event/month. No legacy `schedule_version_id` column is required.
+- Completed broadcasts retain a 90-day operational history. Message retry keys remain stable; already accepted LINE retries are reconciled rather than resent. Retries stop before LINE's 24-hour retry-key expiration.
+
+Deploy the `planner_*` optimization migrations before deploying `send-line-reminders` and `planner-maintenance`. Existing installations need Vault entries `line_reminder_project_url` and `line_reminder_publishable_key`; retention creates a random `planner_maintenance_token` in Vault. The credential validator is executable only by `service_role`. Never put its value in browser code or Git. Both worker endpoints require the Vault credential in the request body in addition to gateway verification. The existing `line_reminder_publishable_key` entry must contain the legacy anon JWT used for gateway authorization; it is sent in both `apikey` and `Authorization` headers.
+
+`tests/planner-database.test.mjs` runs the optimization migrations and actual PostgreSQL/RLS queries in an isolated PGlite database. Its fixture contains schema and permissions, with no production records or credentials. It does not replay older deployment-history migrations, some of which were edited after their original deployment.

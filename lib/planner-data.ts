@@ -3,9 +3,11 @@ import type { Tables } from "./database.types";
 import {
   generateOccurrenceDatesForMonth,
   monthKeyInTimeZone,
+  monthKeyAfter,
 } from "./recurrence";
 import { getSupabaseBrowserClient } from "./supabase";
 import { parsePublicScheduleShare } from "./schedule-share";
+import { retainPlannerMonths, validatePlannerMonth } from "./planner-month-cache";
 
 export type { PublicScheduleShare } from "./schedule-share";
 
@@ -29,7 +31,28 @@ export type LineGroupConnection = Tables<"line_group_connections">;
 export type LineEventReminderSetting = Tables<"line_event_reminder_settings">;
 export type LineUnavailabilityBroadcast = Tables<"line_unavailability_broadcasts">;
 
+export type PlannerMonth = {
+  occurrences: EventOccurrence[];
+  assignments: Assignment[];
+  unavailability: Unavailability[];
+  unavailabilityRequests: UnavailabilityRequest[];
+  lineUnavailabilityBroadcasts: LineUnavailabilityBroadcast[];
+};
+
+export type PlannerMetadata = {
+  eventMonths: Array<{ eventId: string; month: string }>;
+  requestMonths: string[];
+  unreadCount: number;
+  recentAbsenceCount: number;
+  nextOccurrences: EventOccurrence[];
+};
+
+export type PlannerRefreshScope = "all" | "planning";
+
 export type PlannerData = {
+  monthData: Record<string, PlannerMonth>;
+  referenceLoadedAt: number;
+  metadata: PlannerMetadata;
   user: User;
   profile: Profile;
   organization: Organization;
@@ -55,142 +78,94 @@ function fail(message: string, cause?: unknown): never {
   throw new Error(message, { cause });
 }
 
-export async function loadPlannerData(user: User): Promise<PlannerData> {
+/** Reference data is reused only inside the current authenticated session. */
+export async function loadPlannerData(
+  user: User,
+  options: { previous?: PlannerData | null; scope?: PlannerRefreshScope; month?: string } = {},
+): Promise<PlannerData> {
   const supabase = getSupabaseBrowserClient();
-  const { data: membership, error: membershipError } = await supabase
-    .from("organization_members")
-    .select("*")
-    .eq("user_id", user.id)
-    .eq("status", "active")
-    .limit(1)
-    .maybeSingle();
-
-  if (membershipError) fail("Keanggotaan organisasi tidak dapat dimuat.", membershipError);
-  if (!membership) {
-    throw new Error(
-      "Akun ini belum terhubung ke organisasi. Minta pemilik menambahkan Anda sebagai koordinator atau pelayan.",
-    );
-  }
-
-  const organizationId = membership.organization_id;
-  const rangeStart = new Date();
-  rangeStart.setDate(rangeStart.getDate() - 31);
-  const rangeEnd = new Date();
-  rangeEnd.setDate(rangeEnd.getDate() + 550);
-
-  console.log(organizationId);
-  const [profileResult, organizationResult, sectionsResult, volunteersResult, eventsResult, occurrencesResult, absencesResult, requestsResult, readStateResult, assignmentsResult, lineConnectionsResult, lineReminderSettingsResult, lineBroadcastsResult] =
-    await Promise.all([
+  const previous = options.previous?.user.id === user.id ? options.previous : null;
+  let base: PlannerData;
+  if (previous && options.scope === "planning" && Date.now() - previous.referenceLoadedAt < 60_000) {
+    base = { ...previous, user };
+  } else {
+    const { data: membership, error: membershipError } = await supabase
+      .from("organization_members").select("*").eq("user_id", user.id)
+      .eq("status", "active").limit(1).maybeSingle();
+    if (membershipError) fail("Keanggotaan organisasi tidak dapat dimuat.", membershipError);
+    if (!membership) throw new Error("Akun ini belum terhubung ke organisasi. Minta pemilik menambahkan Anda sebagai koordinator atau pelayan.");
+    const organizationId = membership.organization_id;
+    const [profile, organization, sections, volunteers, events, readState] = await Promise.all([
       supabase.from("profiles").select("*").eq("id", user.id).single(),
       supabase.from("organizations").select("*").eq("id", organizationId).single(),
-      supabase
-        .from("service_sections")
-        .select("*")
-        .eq("organization_id", organizationId)
-        .order("sort_order")
-        .order("created_at")
-        .order("id"),
+      supabase.from("service_sections").select("*").eq("organization_id", organizationId)
+        .order("sort_order").order("created_at").order("id"),
       supabase.from("volunteers").select("*").eq("organization_id", organizationId).order("full_name"),
       supabase.from("event_groups").select("*").eq("organization_id", organizationId).order("name"),
-      supabase
-        .from("event_occurrences")
-        .select("*")
-        .eq("organization_id", organizationId)
-        .gte("starts_at", rangeStart.toISOString())
-        .lte("starts_at", rangeEnd.toISOString())
-        .order("starts_at"),
-      supabase
-        .from("unavailability")
-        .select("*")
-        .eq("organization_id", organizationId)
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("unavailability_requests")
-        .select("*")
-        .eq("organization_id", organizationId)
-        .order("request_month", { ascending: false }),
-      supabase
-        .from("unavailability_read_states")
-        .select("*")
-        .eq("organization_id", organizationId)
-        .eq("user_id", user.id)
-        .maybeSingle(),
-      supabase
-        .from("assignments")
-        .select("*")
-        .eq("organization_id", organizationId)
-        .order("created_at"),
-      supabase
-        .from("line_group_connections")
-        .select("*")
-        .eq("status", "active"),
-      supabase
-        .from("line_event_reminder_settings")
-        .select("*"),
-      supabase
-        .from("line_unavailability_broadcasts")
-        .select("*")
-        .order("created_at", { ascending: false }),
+      supabase.from("unavailability_read_states").select("*").eq("organization_id", organizationId)
+        .eq("user_id", user.id).maybeSingle(),
     ]);
-
-  const baseErrors = [
-    profileResult.error,
-    organizationResult.error,
-    sectionsResult.error,
-    volunteersResult.error,
-    eventsResult.error,
-    occurrencesResult.error,
-    absencesResult.error,
-    requestsResult.error,
-    readStateResult.error,
-    assignmentsResult.error,
-    lineConnectionsResult.error,
-    lineReminderSettingsResult.error,
-    lineBroadcastsResult.error,
-  ].filter(Boolean);
-  if (baseErrors.length) fail("Data perencana tidak dapat dimuat.", baseErrors[0]);
-
-  const volunteers = volunteersResult.data ?? [];
-  const events = eventsResult.data ?? [];
-  const volunteerIds = volunteers.map((volunteer) => volunteer.id);
-  const eventIds = events.map((event) => event.id);
-
-  const [eligibilitiesResult, groupVolunteersResult, requirementsResult] = await Promise.all([
-    volunteerIds.length
-      ? supabase.from("volunteer_section_eligibility").select("*").in("volunteer_id", volunteerIds)
-      : Promise.resolve({ data: [] as VolunteerEligibility[], error: null }),
-    eventIds.length
-      ? supabase.from("event_group_volunteers").select("*").in("event_group_id", eventIds)
-      : Promise.resolve({ data: [] as EventGroupVolunteer[], error: null }),
-    eventIds.length
-      ? supabase.from("staffing_requirements").select("*").in("event_group_id", eventIds)
-      : Promise.resolve({ data: [] as StaffingRequirement[], error: null }),
+    const error = profile.error || organization.error || sections.error || volunteers.error || events.error || readState.error;
+    if (error || !profile.data || !organization.data) fail("Data perencana tidak dapat dimuat.", error);
+    const volunteerIds = (volunteers.data ?? []).map((item) => item.id);
+    const eventIds = (events.data ?? []).map((item) => item.id);
+    const [eligibilities, groupVolunteers, requirements, connections, settings] = await Promise.all([
+      volunteerIds.length ? supabase.from("volunteer_section_eligibility").select("*").in("volunteer_id", volunteerIds) : { data: [], error: null },
+      eventIds.length ? supabase.from("event_group_volunteers").select("*").in("event_group_id", eventIds) : { data: [], error: null },
+      eventIds.length ? supabase.from("staffing_requirements").select("*").in("event_group_id", eventIds) : { data: [], error: null },
+      eventIds.length ? supabase.from("line_group_connections").select("*").in("event_id", eventIds).eq("status", "active") : { data: [], error: null },
+      eventIds.length ? supabase.from("line_event_reminder_settings").select("*").in("event_id", eventIds) : { data: [], error: null },
+    ]);
+    const relationError = eligibilities.error || groupVolunteers.error || requirements.error || connections.error || settings.error;
+    if (relationError) fail("Hubungan pelayanan tidak dapat dimuat.", relationError);
+    base = {
+      user, membership, profile: profile.data, organization: organization.data,
+      currentVolunteer: (volunteers.data ?? []).find((item) => item.user_id === user.id) ?? null,
+      sections: sections.data ?? [], volunteers: volunteers.data ?? [], events: events.data ?? [],
+      eligibilities: eligibilities.data ?? [], eventGroupVolunteers: groupVolunteers.data ?? [],
+      requirements: requirements.data ?? [], lineConnections: connections.data ?? [],
+      lineReminderSettings: settings.data ?? [], unavailabilityReadState: readState.data,
+      monthData: previous?.organization.id === organizationId ? previous.monthData : {},
+      metadata: { eventMonths: [], requestMonths: [], unreadCount: 0, recentAbsenceCount: 0, nextOccurrences: [] },
+      referenceLoadedAt: Date.now(), occurrences: [], assignments: [], unavailability: [],
+      unavailabilityRequests: [], lineUnavailabilityBroadcasts: [],
+    };
+  }
+  const currentMonth = monthKeyInTimeZone(new Date(), base.organization.timezone);
+  const pinned = [currentMonth, monthKeyAfter(currentMonth)];
+  const months = options.scope === "planning" && options.month
+    ? [...new Set([...pinned.filter((month) => !base.monthData[month]), options.month])]
+    : [...new Set([...pinned, ...Object.keys(base.monthData)])];
+  const [metadataResult, monthResults] = await Promise.all([
+    supabase.rpc("get_planner_metadata", { target_organization_id: base.organization.id }),
+    Promise.all(months.map(async (month) => ({ month, value: await fetchPlannerMonth(base.organization.id, month) }))),
   ]);
+  if (metadataResult.error || !metadataResult.data) fail("Ringkasan pelayanan tidak dapat dimuat.", metadataResult.error);
+  base = { ...base, metadata: metadataResult.data as unknown as PlannerMetadata };
+  for (const { month, value } of monthResults) base = mergePlannerMonth(base, month, value);
+  return base;
+}
 
-  const relationError =
-    eligibilitiesResult.error || groupVolunteersResult.error || requirementsResult.error;
-  if (relationError) fail("Hubungan pelayan dan kegiatan tidak dapat dimuat.", relationError);
+export async function fetchPlannerMonth(organizationId: string, month: string): Promise<PlannerMonth> {
+  const { data, error } = await getSupabaseBrowserClient().rpc("get_planner_month", {
+    target_organization_id: organizationId,
+    target_month: validatePlannerMonth(month),
+  });
+  if (error || !data) fail("Data bulan pelayanan tidak dapat dimuat.", error);
+  return data as unknown as PlannerMonth;
+}
 
+export function mergePlannerMonth(data: PlannerData, month: string, value: PlannerMonth): PlannerData {
+  const current = monthKeyInTimeZone(new Date(), data.organization.timezone);
+  const monthData = retainPlannerMonths(data.monthData, month, value, [current, monthKeyAfter(current)]);
+  const values = Object.values(monthData);
   return {
-    user,
-    profile: profileResult.data,
-    organization: organizationResult.data,
-    membership,
-    currentVolunteer: volunteers.find((volunteer) => volunteer.user_id === user.id) ?? null,
-    sections: sectionsResult.data ?? [],
-    volunteers,
-    eligibilities: eligibilitiesResult.data ?? [],
-    events,
-    eventGroupVolunteers: groupVolunteersResult.data ?? [],
-    requirements: requirementsResult.data ?? [],
-    occurrences: occurrencesResult.data ?? [],
-    unavailability: absencesResult.data ?? [],
-    unavailabilityRequests: requestsResult.data ?? [],
-    unavailabilityReadState: readStateResult.data,
-    assignments: assignmentsResult.data ?? [],
-    lineConnections: lineConnectionsResult.data ?? [],
-    lineReminderSettings: lineReminderSettingsResult.data ?? [],
-    lineUnavailabilityBroadcasts: lineBroadcastsResult.data ?? [],
+    ...data, monthData,
+    occurrences: values.flatMap((item) => item.occurrences).sort((a, b) => a.starts_at.localeCompare(b.starts_at)),
+    assignments: values.flatMap((item) => item.assignments),
+    unavailability: values.flatMap((item) => item.unavailability).sort((a, b) => b.created_at.localeCompare(a.created_at)),
+    unavailabilityRequests: values.flatMap((item) => item.unavailabilityRequests).sort((a, b) => b.request_month.localeCompare(a.request_month)),
+    lineUnavailabilityBroadcasts: values.flatMap((item) => item.lineUnavailabilityBroadcasts),
   };
 }
 

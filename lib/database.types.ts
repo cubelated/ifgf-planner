@@ -779,6 +779,14 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      get_planner_metadata: {
+        Args: { target_organization_id: string }
+        Returns: Json
+      }
+      get_planner_month: {
+        Args: { target_organization_id: string; target_month: string }
+        Returns: Json
+      }
       delete_unavailability_submission: {
         Args: { submission_ids: string[] }
         Returns: undefined
