@@ -25,7 +25,7 @@ before(async () => {
     create schema vault; create table vault.secrets(id uuid default gen_random_uuid(),name text unique,secret text);
     create view vault.decrypted_secrets as select id,name,secret as decrypted_secret from vault.secrets;
     create function vault.create_secret(secret text,name text) returns uuid language sql as $$ insert into vault.secrets(secret,name) values ($1,$2) returning id $$;
-    create schema net; create function net.http_post(url text,body jsonb default '{}',params jsonb default '{}',headers jsonb default '{}',timeout_milliseconds int default 1000) returns bigint language sql as $$ select 1::bigint $$;
+    create schema net; create table net.requests(headers jsonb,body jsonb); create function net.http_post(url text,body jsonb default '{}',params jsonb default '{}',headers jsonb default '{}',timeout_milliseconds int default 1000) returns bigint language sql as $$ insert into net.requests values ($4,$2); select 1::bigint $$;
     create schema cron; create table cron.job(jobid bigserial primary key,jobname text unique,schedule text,command text);
     create table cron.job_run_details(runid bigint primary key,jobid bigint,status text,start_time timestamptz,end_time timestamptz);
     create function cron.schedule(jobname text,schedule text,command text) returns bigint language sql as $$ insert into cron.job(jobname,schedule,command) values($1,$2,$3) on conflict(jobname) do update set schedule=excluded.schedule,command=excluded.command returning jobid $$;
@@ -151,4 +151,17 @@ test("reminder gate requires a shared month and excludes sent or exhausted deliv
   await db.exec("update public.line_message_deliveries set status='failed',attempt_count=1");
   assert.equal(await scalar("select private.planner_line_work_due()"), true);
   assert.equal(await scalar("select private.planner_line_work_due(now()+interval '16 minutes')"), false);
+}));
+
+
+test("scheduled workers send gateway authorization plus a separate maintenance credential", () => transaction(async () => {
+  await db.exec(`insert into vault.secrets(name,secret) values ('line_reminder_project_url','https://test.invalid'),('line_reminder_publishable_key','test-jwt');
+    insert into storage.objects(bucket_id,name,created_at,updated_at) values ('line-schedule-exports','old.png',now()-interval '31 days',now()-interval '31 days');`);
+  await db.exec("select private.dispatch_planner_maintenance(true)");
+  const request = (await db.query("select * from net.requests")).rows[0];
+  assert.equal(request.headers.Authorization, "Bearer test-jwt");
+  assert.equal(request.headers.apikey, "test-jwt");
+  assert.match(request.body.token, /^[0-9a-f]{64}$/);
+  assert.equal(await scalar("select public.validate_planner_maintenance_token($1)", [request.body.token]), true);
+  assert.equal(await scalar("select public.validate_planner_maintenance_token(repeat('0',64))"), false);
 }));
