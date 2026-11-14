@@ -34,6 +34,10 @@ type FormBroadcast = {
 Deno.serve(async (request: Request) => {
   if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
   try {
+    const body = await request.json().catch(() => null);
+    if (!body || typeof body.token !== "string" || !/^[0-9a-f]{64}$/.test(body.token)) return json({ error: "Unauthorized" }, 401);
+    const { data: authorized, error: authError } = await supabase.rpc("validate_planner_maintenance_token", { request_token: body.token });
+    if (authError || !authorized) return json({ error: "Unauthorized" }, 401);
     const [eventReminders, formBroadcasts] = await Promise.all([
       processEventReminders(),
       processFormBroadcasts(),
@@ -62,7 +66,8 @@ async function processEventReminders() {
     supabase.from("line_group_connections").select("id, event_id, line_group_id").in("event_id", eventIds).eq("status", "active"),
     supabase.from("event_occurrences").select("id, event_group_id, starts_at")
       .in("event_group_id", eventIds).eq("status", "scheduled")
-      .gte("starts_at", now.toISOString())
+      .gte("starts_at", new Date(now.getTime() - GRACE_PERIOD_MS).toISOString())
+      .gt("ends_at", now.toISOString())
       .lte("starts_at", new Date(now.getTime() + maxLead * 60_000 + GRACE_PERIOD_MS).toISOString())
       .order("starts_at"),
   ]);
@@ -173,77 +178,79 @@ async function processFormBroadcasts() {
       jobs.push({ type: "unavailability_expiry", scheduledFor: broadcast.reminder_at });
     }
 
-    let broadcastFailed = false;
     let announcementSent = Boolean(broadcast.announced_at);
     let reminderSent = Boolean(broadcast.reminder_sent_at);
     const eventConnections = connectionsByEvent.get(event.id) ?? [];
     if (jobs.length && !eventConnections.length) skipped += jobs.length;
     for (const job of jobs) {
+      let allAccepted = eventConnections.length > 0;
       for (const connection of eventConnections) {
         due += 1;
-        const delivery = await claimDelivery({
-          eventId: event.id,
-          connectionId: connection.id,
-          occurrenceKey: `unavailability:${broadcast.id}`,
-          reminderType: job.type,
-          scheduledFor: job.scheduledFor,
-        });
-        if (!delivery) { skipped += 1; continue; }
+        let deliveryId: string | null = null;
         try {
+          const delivery = await claimDelivery({
+            eventId: event.id, connectionId: connection.id,
+            occurrenceKey: `unavailability:${broadcast.id}`, reminderType: job.type, scheduledFor: job.scheduledFor,
+          });
+          if (!delivery) {
+            const { data: accepted, error: acceptedError } = await supabase.from("line_message_deliveries")
+              .select("id").eq("line_group_connection_id", connection.id)
+              .eq("occurrence_key", `unavailability:${broadcast.id}`).eq("reminder_type", job.type)
+              .eq("status", "sent").maybeSingle();
+            if (acceptedError) throw acceptedError;
+            if (!accepted) allAccepted = false;
+            skipped += 1;
+            continue;
+          }
+          deliveryId = delivery.id;
           const monthLabel = formatMonth(request.request_month, timezone);
           const message = job.type === "unavailability_announcement"
-            ? [
-                "📝 Formulir Ketidakhadiran",
-                "",
-                `${organization?.name ?? "Pelayanan"} • ${monthLabel}`,
-                `Mohon isi tanggal ketika Anda tidak dapat melayani sebelum ${formatDate(request.expires_on, timezone)}.`,
-                "",
-                broadcast.share_url,
-              ].join("\n")
-            : [
-                "⏳ Pengingat Terakhir",
-                "",
-                `Hari ini adalah hari terakhir untuk mengisi formulir ketidakhadiran ${monthLabel}.`,
-                "",
-                broadcast.share_url,
-              ].join("\n");
+            ? ["📝 Formulir Ketidakhadiran", "", `${organization?.name ?? "Pelayanan"} • ${monthLabel}`,
+                `Mohon isi tanggal ketika Anda tidak dapat melayani sebelum ${formatDate(request.expires_on, timezone)}.`, "", broadcast.share_url].join("\n")
+            : ["⏳ Pengingat Terakhir", "", `Hari ini adalah hari terakhir untuk mengisi formulir ketidakhadiran ${monthLabel}.`, "", broadcast.share_url].join("\n");
           await deliver(connection.line_group_id, [{ type: "text", text: message }], delivery.id);
           await markDeliverySent(delivery.id);
-          const update = job.type === "unavailability_announcement"
-            ? { announced_at: new Date().toISOString() }
-            : { reminder_sent_at: new Date().toISOString() };
-          await supabase.from("line_unavailability_broadcasts").update({ ...update, updated_at: new Date().toISOString() }).eq("id", broadcast.id);
-          if (job.type === "unavailability_announcement") announcementSent = true;
-          else reminderSent = true;
           sent += 1;
         } catch (error) {
-          broadcastFailed = true;
-          await markDeliveryFailed(delivery.id, error);
+          allAccepted = false;
+          if (deliveryId) await markDeliveryFailed(deliveryId, error);
           console.error(`Form broadcast ${job.type} failed`, error);
           failed += 1;
         }
       }
+      if (allAccepted) {
+        const update = job.type === "unavailability_announcement"
+          ? { announced_at: now.toISOString() } : { reminder_sent_at: now.toISOString() };
+        const { error: updateError } = await supabase.from("line_unavailability_broadcasts")
+          .update({ ...update, updated_at: now.toISOString() }).eq("id", broadcast.id);
+        if (updateError) throw new Error(`Could not record broadcast: ${updateError.message}`);
+        if (job.type === "unavailability_announcement") announcementSent = true;
+        else reminderSent = true;
+      }
     }
 
-    if (announcementSent && (!broadcast.reminder_at || reminderSent) && !broadcastFailed) {
-      const { error: deleteError } = await supabase
-        .from("line_unavailability_broadcasts")
-        .delete()
-        .eq("id", broadcast.id);
-      if (deleteError) {
-        throw new Error(`Could not remove completed form broadcast: ${deleteError.message}`);
-      }
+    if (announcementSent && (!broadcast.reminder_at || reminderSent)) {
+      const { error: completionError } = await supabase.from("line_unavailability_broadcasts")
+        .update({ status: "completed", updated_at: now.toISOString() }).eq("id", broadcast.id);
+      if (completionError) throw new Error(`Could not complete form broadcast: ${completionError.message}`);
     }
   }
   return { due, sent, failed, skipped };
 }
 
 async function buildEventMessage(setting: ReminderSetting, event: EventGroup, occurrence: Occurrence, timezone: string) {
-  let query = supabase.from("assignments")
-    .select("section_id, volunteer_id, status, schedule_version_id")
+  if (setting.require_published_schedule) {
+    // Sharing is the publishing action implemented by the current application.
+    const month = localDateKey(new Date(occurrence.starts_at), timezone).slice(0, 7);
+    const { data: shares, error: shareError } = await supabase.from("schedule_shares")
+      .select("id").eq("event_group_id", event.id).eq("organization_id", event.organization_id)
+      .eq("share_month", `${month}-01`).limit(1);
+    if (shareError) throw new Error(`Could not check shared schedule: ${shareError.message}`);
+    if (!shares?.length) return null;
+  }
+  const { data: assignments, error } = await supabase.from("assignments")
+    .select("section_id, volunteer_id, status")
     .eq("occurrence_id", occurrence.id).neq("status", "declined");
-  if (setting.require_published_schedule) query = query.not("schedule_version_id", "is", null);
-  const { data: assignments, error } = await query;
   if (error) throw new Error(`Could not load assignments: ${error.message}`);
   if (!assignments?.length) return null;
   const sectionIds = [...new Set(assignments.map((item) => item.section_id))];
@@ -295,18 +302,21 @@ async function claimDelivery(input: { eventId: string; connectionId: string; occ
   if (!error) return data as { id: string };
   if (error.code !== "23505") throw new Error(`Could not claim delivery: ${error.message}`);
   const { data: existing, error: existingError } = await supabase.from("line_message_deliveries")
-    .select("id, status, attempt_count, updated_at")
+    .select("id, status, attempt_count, updated_at, created_at")
     .eq("line_group_connection_id", input.connectionId)
     .eq("occurrence_key", input.occurrenceKey)
     .eq("reminder_type", input.reminderType).maybeSingle();
   if (existingError) throw new Error(`Could not inspect delivery: ${existingError.message}`);
-  if (!existing || existing.status !== "failed" || existing.attempt_count >= MAX_ATTEMPTS) return null;
+  const staleProcessing = existing?.status === "processing" && Date.now() - new Date(existing.updated_at).getTime() > 5 * 60_000;
+  if (!existing || (existing.status !== "failed" && !staleProcessing) || existing.attempt_count >= MAX_ATTEMPTS) return null;
+  // Never reuse a retry key after LINE's 24-hour duplicate-prevention window.
+  if (Date.now() - new Date(existing.created_at).getTime() >= 23 * 60 * 60_000) return null;
   const { data: retried, error: retryError } = await supabase.from("line_message_deliveries").update({
     status: "processing",
     attempt_count: existing.attempt_count + 1,
     last_error: null,
     updated_at: now,
-  }).eq("id", existing.id).eq("status", "failed").eq("attempt_count", existing.attempt_count)
+  }).eq("id", existing.id).eq("status", existing.status).eq("attempt_count", existing.attempt_count)
     .eq("updated_at", existing.updated_at).select("id").maybeSingle();
   if (retryError) throw new Error(`Could not retry delivery: ${retryError.message}`);
   return retried as { id: string } | null;
@@ -322,6 +332,8 @@ async function deliver(groupId: string, messages: Array<Record<string, unknown>>
     },
     body: JSON.stringify({ to: groupId, messages }),
   });
+  // LINE returns 409 with this header when the same retry key was already accepted.
+  if (response.status === 409 && response.headers.has("x-line-accepted-request-id")) return;
   if (!response.ok) throw new Error(`LINE API ${response.status}: ${(await response.text()).slice(0, 1000)}`);
 }
 

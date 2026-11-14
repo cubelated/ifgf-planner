@@ -79,10 +79,12 @@ import {
   generateOccurrenceDates,
   getEventDeletionImpact,
   loadPlannerData,
+  fetchPlannerMonth,
+  mergePlannerMonth,
+  type PlannerRefreshScope,
   markUnavailabilitySeen,
   monthKeyAfter,
   monthKeyInTimeZone,
-  publishSchedule,
   reorderServiceSections,
   removeAssignment,
   saveLineReminderSetting,
@@ -396,39 +398,87 @@ export default function PlannerApp() {
     useState<string | null>(null);
   const markedUnavailabilityViewRef = useRef<string | null>(null);
 
-  const refresh = useCallback(async (targetUser: User) => {
-    setDataState("loading");
-    setDataError("");
-    try {
-      setData(await loadPlannerData(targetUser));
-      setDataState("ready");
-    } catch (error) {
-      setDataState("error");
-      setDataError(
-        error instanceof Error ? error.message : "Data tidak dapat dimuat.",
-      );
-    }
+  const dataRef = useRef<PlannerData | null>(null);
+  const activeUserRef = useRef<string | null>(null);
+  const generationRef = useRef(0);
+  const dataEpochRef = useRef(0);
+  const monthRequestsRef = useRef(new Map<string, Promise<void>>());
+  const refreshRequestsRef = useRef(new Map<string, Promise<void>>());
+
+  const refresh = useCallback((targetUser: User, scope: PlannerRefreshScope = "all", month?: string) => {
+    const generation = generationRef.current;
+    const key = `${generation}:${targetUser.id}:${scope}:${month ?? "*"}`;
+    const pending = refreshRequestsRef.current.get(key);
+    if (pending) return pending;
+    const epoch = ++dataEpochRef.current;
+    const request = (async () => {
+      setDataState("loading");
+      setDataError("");
+      try {
+        let next = await loadPlannerData(targetUser, { previous: dataRef.current, scope, month });
+        if (generation !== generationRef.current || epoch !== dataEpochRef.current || activeUserRef.current !== targetUser.id) return;
+        const current = dataRef.current;
+        if (current?.organization.id === next.organization.id) {
+          for (const [key, value] of Object.entries(current.monthData)) {
+            if (!next.monthData[key]) next = mergePlannerMonth(next, key, value);
+          }
+        }
+        dataRef.current = next;
+        setData(next);
+        setDataState("ready");
+      } catch (error) {
+        if (generation !== generationRef.current || epoch !== dataEpochRef.current || activeUserRef.current !== targetUser.id) return;
+        setDataState("error");
+        setDataError(error instanceof Error ? error.message : "Data tidak dapat dimuat.");
+      }
+    })().finally(() => { refreshRequestsRef.current.delete(key); });
+    refreshRequestsRef.current.set(key, request);
+    return request;
+  }, []);
+
+  const loadMonth = useCallback((month: string, force = false) => {
+    const snapshot = dataRef.current;
+    if (!snapshot || (!force && snapshot.monthData[month])) return Promise.resolve();
+    const generation = generationRef.current;
+    const epoch = dataEpochRef.current;
+    const key = `${generation}:${epoch}:${snapshot.user.id}:${snapshot.organization.id}:${month}`;
+    const pending = monthRequestsRef.current.get(key);
+    if (pending) return pending;
+    const request = fetchPlannerMonth(snapshot.organization.id, month).then((value) => {
+      if (generation !== generationRef.current || epoch !== dataEpochRef.current || dataRef.current?.organization.id !== snapshot.organization.id) return;
+      const next = mergePlannerMonth(dataRef.current, month, value);
+      dataRef.current = next;
+      setData(next);
+    }).finally(() => { monthRequestsRef.current.delete(key); });
+    monthRequestsRef.current.set(key, request);
+    return request;
   }, []);
 
   useEffect(() => {
     if (!configured) return;
     const supabase = getSupabaseBrowserClient();
-    supabase.auth.getSession().then(({ data: sessionData }) => {
-      const sessionUser = sessionData.session?.user ?? null;
+    let disposed = false;
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (disposed) return;
+      const sessionUser = session?.user ?? null;
+      const userChanged = activeUserRef.current !== (sessionUser?.id ?? null);
+      if (userChanged || event === "SIGNED_OUT") {
+        generationRef.current += 1;
+        activeUserRef.current = sessionUser?.id ?? null;
+        dataRef.current = null;
+        setData(null);
+        setUnavailabilityBadgeSeenAt(null);
+        setUnavailabilityHighlightSeenAt(null);
+      }
       setUser(sessionUser);
       setAuthChecked(true);
-      if (sessionUser) void refresh(sessionUser);
+      // INITIAL_SESSION is the single initial load. Token refreshes and focus-induced
+      // SIGNED_IN events for an unchanged user do not reload the entire planner.
+      if (sessionUser && (event === "INITIAL_SESSION" || userChanged)) {
+        window.setTimeout(() => { if (!disposed) void refresh(sessionUser); }, 0);
+      }
     });
-    const { data: listener } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        const sessionUser = session?.user ?? null;
-        setUser(sessionUser);
-        setAuthChecked(true);
-        if (sessionUser) void refresh(sessionUser);
-        else setData(null);
-      },
-    );
-    return () => listener.subscription.unsubscribe();
+    return () => { disposed = true; listener.subscription.unsubscribe(); };
   }, [configured, refresh]);
 
   useEffect(() => {
@@ -459,7 +509,15 @@ export default function PlannerApp() {
     let cancelled = false;
     void markUnavailabilitySeen(data.organization.id)
       .then((seenAt) => {
-        if (!cancelled) setUnavailabilityBadgeSeenAt(seenAt);
+        if (!cancelled) {
+          setUnavailabilityBadgeSeenAt(seenAt);
+          const current = dataRef.current;
+          if (current?.organization.id === data.organization.id) {
+            const next = { ...current, metadata: { ...current.metadata, unreadCount: 0 } };
+            dataRef.current = next;
+            setData(next);
+          }
+        }
       })
       .catch(() => {
         // Keep navigation usable if saving the read receipt fails temporarily.
@@ -493,6 +551,9 @@ export default function PlannerApp() {
 
   async function handleLogout() {
     if (configured) await getSupabaseBrowserClient().auth.signOut();
+    generationRef.current += 1;
+    activeUserRef.current = null;
+    dataRef.current = null;
     setUser(null);
     setData(null);
     setView("overview");
@@ -542,26 +603,11 @@ export default function PlannerApp() {
         : "Pelayan";
 
   function navBadge(key: View) {
-    if (key === "unavailability" && view !== "unavailability") {
-      const seenAt =
-        unavailabilityBadgeSeenAt ?? data.unavailabilityReadState?.last_seen_at;
-      return new Set(
-        data.unavailability
-          .filter(
-            (absence) =>
-              absence.request_id && (!seenAt || absence.created_at > seenAt),
-          )
-          .map(
-            (absence) =>
-              `${absence.request_id}:${absence.volunteer_id ?? absence.submitted_name?.trim().toLocaleLowerCase("id-ID") ?? absence.id}`,
-          ),
-      ).size;
-    }
-    return 0;
+    return key === "unavailability" && view !== "unavailability" ? (data?.metadata.unreadCount ?? 0) : 0;
   }
 
-  async function changed(message: string) {
-    await refresh(user);
+  async function changed(message: string, scope: PlannerRefreshScope = "all", month?: string) {
+    if (user) await refresh(user, scope, month);
     showToast(message);
   }
 
@@ -722,7 +768,8 @@ export default function PlannerApp() {
               userId={user.id}
               canManage={canManage}
               onAssign={setAssignmentTarget}
-              onChanged={changed}
+              onLoadMonth={loadMonth}
+              onChanged={(message, month) => changed(message, "planning", month)}
               showToast={showToast}
             />
           ) : null}
@@ -745,7 +792,8 @@ export default function PlannerApp() {
             <Unavailability
               data={data}
               seenAt={unavailabilityHighlightSeenAt}
-              onChanged={changed}
+              onLoadMonth={loadMonth}
+              onChanged={(message) => changed(message, "planning")}
               showToast={showToast}
             />
           ) : null}
@@ -825,7 +873,7 @@ export default function PlannerApp() {
           target={assignmentTarget}
           onClose={() => setAssignmentTarget(null)}
           onChanged={async (message) => {
-            await changed(message);
+            await changed(message, "planning", monthKeyInTimeZone(assignmentTarget.occurrence.starts_at, data.organization.timezone));
           }}
         />
       ) : null}
@@ -1312,10 +1360,7 @@ function Overview({
       .map((assignment) => assignment.volunteer_id),
   );
   const unfilled = countUnfilled(data, upcoming.slice(0, 8));
-  const recentAbsences = data.unavailability.filter(
-    (absence) =>
-      now.getTime() - new Date(absence.created_at).getTime() < 86_400_000 * 2,
-  );
+  const recentAbsenceCount = data.metadata.recentAbsenceCount;
   const firstName = data.profile.full_name.split(" ")[0];
   const dateLabel = new Intl.DateTimeFormat("id-ID", {
     timeZone: data.organization.timezone,
@@ -1380,7 +1425,7 @@ function Overview({
         <MetricCard
           icon={Clock3}
           label="Ketidakhadiran baru"
-          value={String(recentAbsences.length)}
+          value={String(recentAbsenceCount)}
           detail={`${data.unavailability.length} laporan tersimpan`}
           tone="violet"
           action={() => onNavigate("unavailability")}
@@ -1438,10 +1483,10 @@ function Overview({
               <p>Tindakan berdasarkan data saat ini</p>
             </div>
             <span className="count-badge">
-              {Number(unfilled > 0) + Number(recentAbsences.length > 0)}
+              {Number(unfilled > 0) + Number(recentAbsenceCount > 0)}
             </span>
           </div>
-          {unfilled || recentAbsences.length ? (
+          {unfilled || recentAbsenceCount ? (
             <div className="attention-list">
               {unfilled ? (
                 <button type="button" onClick={() => onNavigate("schedule")}>
@@ -1455,7 +1500,7 @@ function Overview({
                   <ChevronRight size={18} />
                 </button>
               ) : null}
-              {recentAbsences.length ? (
+              {recentAbsenceCount ? (
                 <button
                   type="button"
                   onClick={() => onNavigate("unavailability")}
@@ -1464,7 +1509,7 @@ function Overview({
                     <Clock3 size={18} />
                   </span>
                   <span>
-                    <strong>{recentAbsences.length} ketidakhadiran baru</strong>
+                    <strong>{recentAbsenceCount} ketidakhadiran baru</strong>
                     <small>Periksa dampak terhadap jadwal</small>
                   </span>
                   <ChevronRight size={18} />
@@ -1641,11 +1686,7 @@ function Events({
       />
       <section className="event-grid">
         {data.events.map((event, index) => {
-          const next = data.occurrences.find(
-            (occurrence) =>
-              occurrence.event_group_id === event.id &&
-              new Date(occurrence.starts_at) >= new Date(),
-          );
+          const next = data.metadata.nextOccurrences.find((occurrence) => occurrence.event_group_id === event.id);
           const requirements = data.requirements.filter(
             (requirement) => requirement.event_group_id === event.id,
           );
@@ -2035,11 +2076,13 @@ function Unavailability({
   data,
   seenAt,
   onChanged,
+  onLoadMonth,
   showToast,
 }: {
   data: PlannerData;
   seenAt: string | null;
   onChanged: (message: string) => Promise<void>;
+  onLoadMonth: (month: string, force?: boolean) => Promise<void>;
   showToast: (message: string) => void;
 }) {
   const initialMonth = monthKeyInTimeZone(new Date(), data.organization.timezone);
@@ -2055,6 +2098,15 @@ function Unavailability({
       )
     : undefined;
   const [month, setMonth] = useState(initialMonth);
+  const [monthError, setMonthError] = useState("");
+  const monthLoaded = Boolean(data.monthData[month]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!monthLoaded) void onLoadMonth(month).catch((error) => {
+      if (!cancelled) setMonthError(error instanceof Error ? error.message : "Data bulan tidak dapat dimuat.");
+    });
+    return () => { cancelled = true; };
+  }, [month, monthLoaded, onLoadMonth]);
   const [expiresOn, setExpiresOn] = useState(() =>
     initialRequest?.expires_on ?? defaultUnavailabilityExpiry(initialMonth),
   );
@@ -2104,9 +2156,8 @@ function Unavailability({
     } catch {
       // Browser storage can be unavailable in private or restricted contexts.
     }
-    if (!storedMonth || storedMonth === initialMonth) return;
-
-    const restoredMonth = storedMonth;
+    const restoredMonth = storedMonth ?? month;
+    if (!data.monthData[restoredMonth]) return;
     const restoredRequest = data.unavailabilityRequests.find(
       (request) => request.request_month === `${restoredMonth}-01`,
     );
@@ -2159,7 +2210,7 @@ function Unavailability({
     return () => {
       cancelled = true;
     };
-  }, [data, initialMonth, monthStorageKey]);
+  }, [data.monthData, data.events, data.lineConnections, data.unavailabilityRequests, data.lineUnavailabilityBroadcasts, initialMonth, monthStorageKey, month, data.organization.timezone]);
 
   useEffect(() => {
     const selectedRequest = data.unavailabilityRequests.find(
@@ -2393,6 +2444,7 @@ function Unavailability({
                           broadcast.status !== "cancelled",
                       )
                     : undefined;
+                  setMonthError("");
                   setMonth(nextMonth);
                   setExpiresOn(
                     nextRequest?.expires_on ??
@@ -2581,7 +2633,7 @@ function Unavailability({
             className="button button-primary button-block"
             type="button"
             onClick={createLink}
-            disabled={creating || !month || expiryInvalid || lineScheduleInvalid}
+            disabled={creating || !monthLoaded || !month || expiryInvalid || lineScheduleInvalid}
           >
             {creating ? (
               <LoaderCircle className="spin" size={17} />
@@ -2635,7 +2687,14 @@ function Unavailability({
           )}
         </div>
 
-        <div className="card monthly-report-card">
+        {!monthLoaded ? <div className="card" role="status">
+          {monthError || "Memuat data bulan..."}
+          {monthError ? <button className="button button-secondary" onClick={() => {
+            setMonthError("");
+            void onLoadMonth(month, true).catch((error) => setMonthError(String(error.message)));
+          }}>Coba lagi</button> : null}
+        </div> : null}
+        <div className="card monthly-report-card" aria-busy={!monthLoaded}>
           <div className="card-heading monthly-report-heading">
             <div>
               <h2>Laporan {formatMonthKey(month)}</h2>

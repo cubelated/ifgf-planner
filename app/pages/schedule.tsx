@@ -148,15 +148,7 @@ function defaultScheduleMonth(data: PlannerData, eventGroupId: string) {
     new Date(),
     data.organization.timezone,
   );
-  const eventMonths = Array.from(
-    new Set(
-      data.occurrences
-        .filter((occurrence) => occurrence.event_group_id === eventGroupId)
-        .map((occurrence) =>
-          monthKeyInTimeZone(occurrence.starts_at, data.organization.timezone),
-        ),
-    ),
-  ).sort();
+  const eventMonths = data.metadata.eventMonths.filter((item) => item.eventId === eventGroupId).map((item) => item.month).sort();
   return (
     eventMonths.find((month) => month >= currentMonth) ??
     eventMonths.at(-1) ??
@@ -381,6 +373,7 @@ export default function Schedule({
   canManage,
   onAssign,
   onChanged,
+  onLoadMonth,
   showToast,
 }: {
   data: PlannerData;
@@ -390,7 +383,8 @@ export default function Schedule({
     occurrence: EventOccurrence;
     section: ServiceSection;
   }) => void;
-  onChanged: (message: string) => Promise<void>;
+  onChanged: (message: string, month?: string) => Promise<void>;
+  onLoadMonth: (month: string, force?: boolean) => Promise<void>;
   showToast: (message: string) => void;
 }) {
   const [sharing, setSharing] = useState(false);
@@ -401,6 +395,15 @@ export default function Schedule({
     defaultScheduleMonth(data, initialEventId),
   );
   const [filtersRestored, setFiltersRestored] = useState(false);
+  const [monthError, setMonthError] = useState("");
+  const monthLoaded = Boolean(data.monthData[selectedMonth]);
+  useEffect(() => {
+    let cancelled = false;
+    if (filtersRestored && !monthLoaded) void onLoadMonth(selectedMonth).catch((error) => {
+      if (!cancelled) setMonthError(error instanceof Error ? error.message : "Data bulan tidak dapat dimuat.");
+    });
+    return () => { cancelled = true; };
+  }, [selectedMonth, monthLoaded, filtersRestored, onLoadMonth]);
   const [generating, setGenerating] = useState(false);
   const appearanceKey = scheduleAppearanceStorageKey(data.organization.id, userId, eventFilter);
   const [storedAppearance, setStoredAppearance] = useState<{
@@ -455,9 +458,7 @@ export default function Schedule({
   );
   const availableMonths = Array.from(
     new Set([
-      ...eventOccurrences.map((occurrence) =>
-        monthKeyInTimeZone(occurrence.starts_at, data.organization.timezone),
-      ),
+      ...data.metadata.eventMonths.filter((item) => item.eventId === eventFilter).map((item) => item.month),
       selectedMonth,
     ]),
   ).sort();
@@ -625,6 +626,7 @@ export default function Schedule({
         generatedCount
           ? `${generatedCount} tanggal ${formatMonthKey(nextMonth)} berhasil dibuat.`
           : `${formatMonthKey(nextMonth)} tidak memiliki tanggal yang sesuai dengan pola kegiatan.`,
+        nextMonth,
       );
     } catch (error) {
       showToast(
@@ -780,7 +782,7 @@ export default function Schedule({
             <details className="export-menu">
               <summary
                 className="button button-secondary"
-                aria-disabled={!exportRows.length || Boolean(exporting)}
+                aria-disabled={!monthLoaded || !exportRows.length || Boolean(exporting)}
               >
                 {exporting ? (
                   <LoaderCircle className="spin" size={17} />
@@ -793,7 +795,7 @@ export default function Schedule({
                 <button
                   type="button"
                   role="menuitem"
-                  disabled={!exportRows.length || Boolean(exporting)}
+                  disabled={!monthLoaded || !exportRows.length || Boolean(exporting)}
                   onClick={(event) => {
                     event.currentTarget
                       .closest("details")
@@ -810,7 +812,7 @@ export default function Schedule({
                 <button
                   type="button"
                   role="menuitem"
-                  disabled={!exportRows.length || Boolean(exporting)}
+                  disabled={!monthLoaded || !exportRows.length || Boolean(exporting)}
                   onClick={(event) => {
                     event.currentTarget
                       .closest("details")
@@ -827,7 +829,7 @@ export default function Schedule({
                 <button
                   type="button"
                   role="menuitem"
-                  disabled={!exportRows.length || Boolean(exporting)}
+                  disabled={!monthLoaded || !exportRows.length || Boolean(exporting)}
                   onClick={(event) => {
                     event.currentTarget
                       .closest("details")
@@ -847,7 +849,7 @@ export default function Schedule({
                   <button
                     type="button"
                     role="menuitem"
-                    disabled={!exportRows.length || Boolean(exporting)}
+                    disabled={!monthLoaded || !exportRows.length || Boolean(exporting)}
                     onClick={(event) => {
                       event.currentTarget.closest("details")?.removeAttribute("open");
                       void handleExport("png-line");
@@ -913,7 +915,7 @@ export default function Schedule({
           <span className="sr-only">Pilih bulan</span>
           <select
             value={selectedMonth}
-            onChange={(event) => setSelectedMonth(event.target.value)}
+            onChange={(event) => { setMonthError(""); setSelectedMonth(event.target.value); }}
             aria-label="Tampilkan bulan jadwal"
             disabled={!selectedEvent}
           >
@@ -941,6 +943,13 @@ export default function Schedule({
           </button>
         ) : null}
       </div>
+      {!monthLoaded ? <div className="card" role="status">
+        {monthError || "Memuat jadwal bulan..."}
+        {monthError ? <button className="button button-secondary" onClick={() => {
+          setMonthError("");
+          void onLoadMonth(selectedMonth, true).catch((error) => setMonthError(String(error.message)));
+        }}>Coba lagi</button> : null}
+      </div> : null}
       <ScheduleCustomization
         appearance={appearance}
         onChange={updateAppearance}

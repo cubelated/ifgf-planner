@@ -17,3 +17,6 @@ verify_jwt = true
 
 [functions.broadcast-line-schedule]
 verify_jwt = true
+
+[functions.planner-maintenance]
+verify_jwt = true
