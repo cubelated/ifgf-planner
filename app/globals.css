@@ -4217,7 +4217,14 @@ a:focus-visible {
   font-weight: 700;
 }
 
-.public-calendar-grid > button:hover {
+.public-calendar-grid > button:disabled {
+  cursor: not-allowed;
+  color: var(--ink-500);
+  background: var(--surface-soft);
+  opacity: 0.45;
+}
+
+.public-calendar-grid > button:hover:not(:disabled) {
   border-color: var(--blue-600);
   background: var(--blue-100);
 }

@@ -19,6 +19,7 @@ import {
   type PublicUnavailabilityForm,
 } from "@/lib/planner-data";
 import { isSupabaseConfigured } from "@/lib/supabase";
+import { allowedUnavailabilityDates, retainEligibleDates } from "@/lib/unavailability-event-dates";
 
 function formatMonth(monthKey: string) {
   const [year, month] = monthKey.split("-").map(Number);
@@ -142,23 +143,32 @@ export default function UnavailabilityFormPage() {
       .slice(0, 6);
   }, [form, name]);
 
+  const allowedDates = useMemo(() => new Set(allowedUnavailabilityDates(form, volunteerId)), [form, volunteerId]);
+
+  function changeVolunteer(nextId: string | null) {
+    setVolunteerId(nextId);
+    setSelectedDates((current) => retainEligibleDates(current, allowedUnavailabilityDates(form, nextId)));
+    setError("");
+  }
+
   function updateName(value: string) {
     setName(value);
     const normalized = value.trim().toLocaleLowerCase("id-ID");
     const exact = form?.volunteers.find(
-      (volunteer) => volunteer.name.toLocaleLowerCase("id-ID") === normalized,
+      (volunteer) => volunteer.name.trim().toLocaleLowerCase("id-ID") === normalized,
     );
-    setVolunteerId(exact?.id ?? null);
+    changeVolunteer(exact?.id ?? null);
     setSuggestionsOpen(true);
   }
 
   function selectVolunteer(id: string, fullName: string) {
     setName(fullName);
-    setVolunteerId(id);
+    changeVolunteer(id);
     setSuggestionsOpen(false);
   }
 
   function toggleDate(date: string) {
+    if (!allowedDates.has(date)) return;
     setSelectedDates((current) => current.includes(date)
       ? current.filter((item) => item !== date)
       : [...current, date].sort());
@@ -172,6 +182,11 @@ export default function UnavailabilityFormPage() {
     }
     if (!selectedDates.length) {
       setError("Pilih setidaknya satu tanggal.");
+      return;
+    }
+
+    if (selectedDates.some((date) => !allowedDates.has(date))) {
+      setError("Pilih hanya tanggal kegiatan yang tersedia untuk nama ini.");
       return;
     }
 
@@ -266,8 +281,14 @@ export default function UnavailabilityFormPage() {
 
           <fieldset className="public-calendar-fieldset">
             <legend>Pilih tanggal yang tidak tersedia</legend>
+            <p id="event-date-guidance">{volunteerId
+              ? "Hanya tanggal kegiatan yang Anda ikuti yang dapat dipilih."
+              : "Hanya tanggal dengan kegiatan gereja yang dapat dipilih."}</p>
+            {!allowedDates.size ? <p className="form-error" role="status">{volunteerId
+              ? "Belum ada tanggal kegiatan yang dapat dipilih untuk pelayan ini pada bulan ini."
+              : "Belum ada tanggal kegiatan yang dapat dipilih pada bulan ini."}</p> : null}
             <div className="public-calendar-weekdays" aria-hidden="true">{["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"].map((day) => <span key={day}>{day}</span>)}</div>
-            <div className="public-calendar-grid">{calendarCells(form.month).map((cell) => cell.date ? <button key={cell.key} type="button" className={selectedDates.includes(cell.date) ? "selected" : ""} onClick={() => toggleDate(cell.date!)} aria-pressed={selectedDates.includes(cell.date)} aria-label={`${cell.day} ${formatMonth(form.month)}`}>{cell.day}{selectedDates.includes(cell.date) ? <Check size={13} /> : null}</button> : <span key={cell.key} />)}</div>
+            <div className="public-calendar-grid">{calendarCells(form.month).map((cell) => cell.date ? <button key={cell.key} type="button" className={selectedDates.includes(cell.date) ? "selected" : ""} disabled={!allowedDates.has(cell.date)} title={!allowedDates.has(cell.date) ? "Tidak ada kegiatan yang dapat dipilih pada tanggal ini" : undefined} aria-describedby="event-date-guidance" onClick={() => toggleDate(cell.date!)} aria-pressed={selectedDates.includes(cell.date)} aria-label={`${cell.day} ${formatMonth(form.month)}`}>{cell.day}{selectedDates.includes(cell.date) ? <Check size={13} /> : null}</button> : <span key={cell.key} />)}</div>
             <p>{selectedDates.length ? `${selectedDates.length} tanggal dipilih` : "Belum ada tanggal dipilih"}</p>
           </fieldset>
 
@@ -276,7 +297,7 @@ export default function UnavailabilityFormPage() {
           <label className="reason-field">Catatan untuk koordinator <span>(opsional)</span><textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} placeholder="Contoh: Sedang berada di luar kota" /></label>
 
           {error ? <p className="form-error" role="alert">{error}</p> : null}
-          <button className="button button-primary button-block public-submit" type="submit" disabled={saving || !name.trim() || !selectedDates.length}>{saving ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />} {saving ? "Mengirim..." : "Konfirmasi ketidakhadiran"}</button>
+          <button className="button button-primary button-block public-submit" type="submit" disabled={saving || !name.trim() || !selectedDates.length || !allowedDates.size}>{saving ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />} {saving ? "Mengirim..." : "Konfirmasi ketidakhadiran"}</button>
           <p className="public-form-privacy"><ShieldCheck size={16} /> Memilih nama dari daftar akan langsung memblokir penugasan pada tanggal tersebut.</p>
         </form>
       </section>
