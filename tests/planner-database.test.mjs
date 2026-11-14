@@ -31,6 +31,9 @@ before(async () => {
     create function cron.schedule(jobname text,schedule text,command text) returns bigint language sql as $$ insert into cron.job(jobname,schedule,command) values($1,$2,$3) on conflict(jobname) do update set schedule=excluded.schedule,command=excluded.command returning jobid $$;
   `);
   await db.exec(await readFile(new URL("./fixtures/planner-schema.sql", import.meta.url), "utf8"));
+  // These existing partial indexes support the public form's atomic resubmission path.
+  await db.exec(`create unique index unavailability_volunteer_date_unique on public.unavailability(organization_id,volunteer_id,unavailable_date) where volunteer_id is not null;
+    create unique index unavailability_request_name_date_unique on public.unavailability(request_id,lower(btrim(submitted_name)),unavailable_date) where volunteer_id is null and request_id is not null;`);
   const migrations = new URL("../supabase/migrations/", import.meta.url);
   for (const name of (await readdir(migrations)).filter((name) => name.startsWith("20261114")).sort()) {
     await db.exec(await readFile(new URL(name, migrations), "utf8"));
@@ -164,4 +167,80 @@ test("scheduled workers send gateway authorization plus a separate maintenance c
   assert.match(request.body.token, /^[0-9a-f]{64}$/);
   assert.equal(await scalar("select public.validate_planner_maintenance_token($1)", [request.body.token]), true);
   assert.equal(await scalar("select public.validate_planner_maintenance_token(repeat('0',64))"), false);
+}));
+
+
+const formToken = "test-event-date-form-token-".padEnd(40,"x");
+async function createEventDateForm() {
+  await db.query(`insert into public.unavailability_requests(organization_id,request_month,expires_on,token_hash)
+    values($1,'2099-02-01','2099-02-28',encode(extensions.digest($2,'sha256'),'hex'))`, [org,formToken]);
+  await db.exec(`update public.event_groups set week_occurrences=array[1,3]::smallint[] where id='${event}';
+    insert into public.event_group_volunteers(event_group_id,volunteer_id) values ('${event}','${volunteer}');`);
+}
+async function submitEventDates(name, id, dates) {
+  return scalar("select private.save_unavailability_form($1,$2,$3,$4::date[],'')", [formToken,name,id,dates]);
+}
+
+test("form exposes membership dates before assignments and includes recurrence for ungenerated months", () => transaction(async () => {
+  await createEventDateForm();
+  const otherEvent = await scalar(`insert into public.event_groups(organization_id,name,weekday,start_time) values ('${org}','Monday team',1,'09:00') returning id`);
+  const form = await scalar("select private.load_unavailability_form($1)", [formToken]);
+  assert.deepEqual(form.eventDates, ["2099-02-01","2099-02-02","2099-02-09","2099-02-15","2099-02-16","2099-02-23"]);
+  assert.deepEqual(form.volunteers.find((v) => v.id === volunteer).eventDates, ["2099-02-01","2099-02-15"]);
+  assert.equal(await scalar("select count(*)::int from public.event_occurrences"), 0);
+  assert.ok(otherEvent);
+}));
+
+test("saved dates override recurrence and canceled or inactive events cannot be selected", () => transaction(async () => {
+  await createEventDateForm();
+  await db.exec(`insert into public.event_occurrences(organization_id,event_group_id,starts_at,ends_at,status) values
+    ('${org}','${event}','2099-02-14T01:00Z','2099-02-14T03:00Z','scheduled'),
+    ('${org}','${event}','2099-02-21T01:00Z','2099-02-21T03:00Z','cancelled');`);
+  assert.deepEqual(await scalar("select to_jsonb(private.unavailability_event_dates($1,'2099-02-01',$2))",[org,volunteer]), ["2099-02-14"]);
+  await db.exec(`update public.event_groups set is_active=false where id='${event}'`);
+  assert.deepEqual(await scalar("select to_jsonb(private.unavailability_event_dates($1,'2099-02-01',null))",[org]), []);
+}));
+
+test("event eligibility uses local calendar boundaries and excludes other organizations", () => transaction(async () => {
+  await createEventDateForm();
+  await db.exec(`insert into public.event_occurrences(organization_id,event_group_id,starts_at,ends_at) values
+    ('${org}','${event}','2099-01-31T16:00Z','2099-01-31T18:00Z'),
+    ('${org}','${event}','2099-02-28T16:00Z','2099-02-28T18:00Z');
+    insert into public.event_groups(organization_id,name,weekday,start_time) values ('${otherOrg}','Other organization Tuesday',2,'09:00');`);
+  assert.deepEqual(await scalar("select to_jsonb(private.unavailability_event_dates($1,'2099-02-01',$2))",[org,volunteer]), ["2099-02-01"]);
+}));
+
+test("selected volunteers with no event membership have no eligible dates", () => transaction(async () => {
+  await createEventDateForm();
+  await db.exec("delete from public.event_group_volunteers");
+  const form = await scalar("select private.load_unavailability_form($1)", [formToken]);
+  assert.deepEqual(form.volunteers.find((v) => v.id === volunteer).eventDates, []);
+  await assert.rejects(submitEventDates("Test volunteer",volunteer,["2099-02-01"]), /Pilih hanya tanggal kegiatan/);
+}));
+
+test("invalid submissions cannot overwrite an existing valid response", () => transaction(async () => {
+  await createEventDateForm();
+  await submitEventDates("Test volunteer",volunteer,["2099-02-01"]);
+  await db.exec("savepoint invalid_dates");
+  await assert.rejects(submitEventDates("Test volunteer",volunteer,["2099-02-01","2099-02-02"]), /Pilih hanya tanggal kegiatan/);
+  await db.exec("rollback to savepoint invalid_dates");
+  assert.equal(await scalar("select count(*)::int from public.unavailability"), 1);
+  assert.equal(await scalar("select unavailable_date::text from public.unavailability"), "2099-02-01");
+}));
+
+test("new names can choose organization event dates, and omitting an existing volunteer ID cannot bypass restrictions", () => transaction(async () => {
+  await createEventDateForm();
+  await db.exec(`insert into public.event_groups(organization_id,name,weekday,start_time) values ('${org}','Monday team',1,'09:00')`);
+  await submitEventDates("New person",null,["2099-02-02"]);
+  assert.equal(await scalar("select volunteer_id from public.unavailability where submitted_name='New person'"), null);
+  await db.exec("savepoint missing_id");
+  await assert.rejects(submitEventDates(" test VOLUNTEER ",null,["2099-02-02"]), /Pilih hanya tanggal kegiatan/);
+  await db.exec("rollback to savepoint missing_id");
+  await submitEventDates(" test VOLUNTEER ",null,["2099-02-01"]);
+  assert.equal(await scalar("select volunteer_id from public.unavailability where submitted_name='Test volunteer'"), volunteer);
+}));
+
+test("public clients cannot directly call privileged form date functions", () => transaction(async () => {
+  await db.exec("set local role authenticated");
+  await assert.rejects(db.query("select to_jsonb(private.unavailability_event_dates($1,'2099-02-01',null))",[org]), /permission denied/);
 }));

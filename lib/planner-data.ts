@@ -8,6 +8,7 @@ import {
 import { getSupabaseBrowserClient } from "./supabase";
 import { parsePublicScheduleShare } from "./schedule-share";
 import { retainPlannerMonths, validatePlannerMonth } from "./planner-month-cache";
+import { parseEventDates } from "./unavailability-event-dates";
 
 export type { PublicScheduleShare } from "./schedule-share";
 
@@ -865,7 +866,8 @@ export type PublicUnavailabilityForm = {
   month: string;
   expiresOn: string;
   timezone: string;
-  volunteers: Array<{ id: string; name: string }>;
+  eventDates: string[];
+  volunteers: Array<{ id: string; name: string; eventDates: string[] }>;
 };
 
 export type ClosedPublicUnavailabilityForm = {
@@ -908,12 +910,17 @@ function parsePublicUnavailabilityForm(value: unknown): PublicUnavailabilityForm
     || !Array.isArray(record.volunteers)
   ) return null;
 
+  const eventDates = parseEventDates(record.eventDates, record.month);
+  if (!eventDates) return null;
   const volunteers = record.volunteers.flatMap((candidate) => {
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
     const volunteer = candidate as Record<string, unknown>;
     if (typeof volunteer.id !== "string" || typeof volunteer.name !== "string") return [];
-    return [{ id: volunteer.id, name: volunteer.name }];
+    const dates = parseEventDates(volunteer.eventDates, record.month as string);
+    if (!dates) return [];
+    return [{ id: volunteer.id, name: volunteer.name, eventDates: dates }];
   });
+  if (volunteers.length !== record.volunteers.length) return null;
 
   return {
     status: "open",
@@ -921,6 +928,7 @@ function parsePublicUnavailabilityForm(value: unknown): PublicUnavailabilityForm
     month: record.month,
     expiresOn: record.expiresOn,
     timezone: record.timezone,
+    eventDates,
     volunteers,
   };
 }

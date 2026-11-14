@@ -9,7 +9,9 @@ Indonesian-first volunteer scheduling web app for IFGF church teams. Application
 - Recurring event setup with persisted future occurrences
 - Service sections, volunteer eligibility, and event-group membership management
 - Schedule assignments validated against eligibility, event membership, status, and availability
-- Shareable monthly unavailability forms with name autocomplete and date selection
+- Shareable monthly unavailability forms with name autocomplete and event-date selection
+- Existing volunteers can choose only dates for their event groups; new names can choose any organization event date
+- Recurring event dates work before a month is generated; saved occurrences and cancellations override the recurring pattern
 - Month-filtered coordinator reports with assignment-conflict counts
 - Draft/published schedule versions
 - Event-scoped LINE Official Account group connections
